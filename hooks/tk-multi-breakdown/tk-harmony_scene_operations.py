@@ -106,16 +106,20 @@ class BreakdownSceneOperations(Hook):
 
         engine = self.parent.engine
 
-        for i in items:
-            attr = i["node"]
-            node_type = i["type"]
-            new_path = i["path"]
+        if not items:
+            return
 
-            if node_type == "file":
-                # Not Implemented
-                pass
+        engine.show_busy("tk-multi-breakdown", "Updating scene references...")
 
-        if items:
-            engine.show_busy(
-                "tk-multi-breakdown", "Updating functionality has not been implemented yet."
-            )
+        try:
+            for i in items:
+                node = i["node"]
+                attr = i["attr"]
+                new_path = i["path"].replace("\\", "/")
+
+                if attr == "SOUND":
+                    engine.app.relink_sound_column(node, new_path)
+                else:
+                    engine.app.relink_read_node(node, new_path)
+        finally:
+            engine.clear_busy()

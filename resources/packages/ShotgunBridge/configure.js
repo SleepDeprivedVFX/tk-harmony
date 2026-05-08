@@ -1253,6 +1253,68 @@ function Engine()
         return sound_filenames;
     };
 
+    self.relink_read_node = function(data)
+    {
+        var node_name = data.node;
+        var new_path  = data.path;
+
+        scene.beginUndoRedoAccum("Relink Read Node");
+        try
+        {
+            var col_name  = node.linkedColumn(node_name, "DRAWING.ELEMENT");
+            var elem_id   = column.getElementIdOfDrawing(col_name);
+            var draw_path = Drawing.filename(elem_id, "1");
+            copyFile(new_path, draw_path);
+            setNodeMetadata(node_name, "meta.shotgun.path", new_path);
+            scene.endUndoRedoAccum();
+        }
+        catch(e)
+        {
+            scene.cancelUndoRedoAccum();
+            self.log_exception("RELINK_READ_NODE failed: " + e);
+            return false;
+        }
+        return node_name;
+    };
+    self.registerCallback("RELINK_READ_NODE", self.relink_read_node);
+
+    self.relink_sound_column = function(data)
+    {
+        var col_name = data.column_name;
+        var new_path = data.path;
+
+        scene.beginUndoRedoAccum("Relink Sound Column");
+        try
+        {
+            column.importSound(col_name, 1, new_path);
+            setSceneMetadata(col_name + ".meta.shotgun.path", new_path);
+            scene.endUndoRedoAccum();
+        }
+        catch(e)
+        {
+            scene.cancelUndoRedoAccum();
+            self.log_exception("RELINK_SOUND_COLUMN failed: " + e);
+            return false;
+        }
+        return col_name;
+    };
+    self.registerCallback("RELINK_SOUND_COLUMN", self.relink_sound_column);
+
+    self.set_node_metadata = function(data)
+    {
+        try
+        {
+            setNodeMetadata(data.node, data.attr_name, data.value);
+        }
+        catch(e)
+        {
+            self.log_exception("SET_NODE_METADATA failed: " + e);
+            return false;
+        }
+        return true;
+    };
+    self.registerCallback("SET_NODE_METADATA", self.set_node_metadata);
+
     // ----
     self.ping = function(data)
     {
@@ -1352,6 +1414,11 @@ function Engine()
         self.registerCallback("GET_NODES_OF_TYPE",           self.get_nodes_of_type);
         self.registerCallback("GET_COLUMNS_OF_TYPE",         self.get_columns_of_type);
         self.registerCallback("GET_SOUND_COLUMN_FILENAMES",  self.get_sound_column_filenames);
+
+        // Breakdown update / relink
+        self.registerCallback("RELINK_READ_NODE",    self.relink_read_node);
+        self.registerCallback("RELINK_SOUND_COLUMN", self.relink_sound_column);
+        self.registerCallback("SET_NODE_METADATA",   self.set_node_metadata);
 
         self.registerCallback("PING",  self.ping);
         self.registerCallback("CLOSE", self.stop);
