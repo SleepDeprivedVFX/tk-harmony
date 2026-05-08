@@ -358,3 +358,14 @@ class Application(QTcpSocketClient):
 
     def relink_sound_column(self, column_name, path):
         return self.send_and_receive_command("RELINK_SOUND_COLUMN", column_name=column_name, path=path)
+
+    def render_scene(self, output_dir, base_name, start_frame, stop_frame, status_path, file_format="PNG4"):
+        self.send_command(
+            "RENDER_SCENE",
+            output_dir=output_dir,
+            base_name=base_name,
+            start_frame=start_frame,
+            stop_frame=stop_frame,
+            status_path=status_path,
+            file_format=file_format,
+        )
