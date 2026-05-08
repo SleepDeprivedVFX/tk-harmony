@@ -39,3 +39,6 @@ pip-log.txt
 .DS_Store
 
 *.*~
+
+.claude
+DEVELOPMENT_NOTES.txt
