@@ -1315,6 +1315,71 @@ function Engine()
     };
     self.registerCallback("SET_NODE_METADATA", self.set_node_metadata);
 
+    self.render_scene = function(data) {
+        var output_dir   = data.output_dir;    // base directory for image sequence
+        var base_name    = data.base_name;     // filename base, e.g. "SH010.v001"
+        var start_frame  = data.start_frame;
+        var stop_frame   = data.stop_frame;
+        var file_format  = data.file_format || "PNG4";
+        var status_path  = data.status_path;  // path Python will poll for completion
+
+        // Defer the render so the socket can process the incoming message first
+        singleShotTimer(0, function() {
+            var success = false;
+            var error_msg = "";
+            var rendered_frames = 0;
+
+            try {
+                // Set render output path and format
+                // output_path is the base: Harmony appends frame numbers automatically
+                var output_path = output_dir + "/" + base_name;
+
+                render.setRenderMode(render.DRAFT);
+
+                // renderSceneAllWithCallback available in Harmony 17+
+                // falls back to renderSceneAll for older versions
+                if (typeof render.renderSceneAllWithCallback === "function") {
+                    render.renderSceneAllWithCallback(function(frameResult) {
+                        rendered_frames += 1;
+                    });
+                } else {
+                    render.renderSceneAll();
+                    rendered_frames = stop_frame - start_frame + 1;
+                }
+
+                success = true;
+            } catch(e) {
+                error_msg = e.toString();
+                self.log_exception("RENDER_SCENE failed: " + e);
+            }
+
+            // Write status file so Python knows we are done
+            var status = {
+                "success": success,
+                "rendered_frames": rendered_frames,
+                "output_dir": output_dir,
+                "base_name": base_name,
+                "error": error_msg
+            };
+
+            try {
+                var qfile = new QFile(status_path);
+                if (qfile.open(QIODevice.WriteOnly | QIODevice.Text)) {
+                    var stream = new QTextStream(qfile);
+                    stream.writeString(JSON.stringify(status));
+                    qfile.close();
+                } else {
+                    self.log_exception("RENDER_SCENE: could not open status file for writing: " + status_path);
+                }
+            } catch(write_err) {
+                self.log_exception("RENDER_SCENE: could not write status file: " + write_err);
+            }
+        });
+
+        return true;  // Immediate acknowledgement — render happens asynchronously
+    };
+    self.registerCallback("RENDER_SCENE", self.render_scene);
+
     // ----
     self.ping = function(data)
     {
@@ -1419,6 +1484,9 @@ function Engine()
         self.registerCallback("RELINK_READ_NODE",    self.relink_read_node);
         self.registerCallback("RELINK_SOUND_COLUMN", self.relink_sound_column);
         self.registerCallback("SET_NODE_METADATA",   self.set_node_metadata);
+
+        // Render
+        self.registerCallback("RENDER_SCENE", self.render_scene);
 
         self.registerCallback("PING",  self.ping);
         self.registerCallback("CLOSE", self.stop);
