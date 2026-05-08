@@ -86,7 +86,7 @@ def copytree_multi(src, dst, symlinks=False, ignore=None):
             errors.extend(err.args[0])
     try:
         shutil.copystat(src, dst)
-    except WindowsError:
+    except OSError:
         pass
     except OSError as why:
         errors.extend((src, dst, str(why)))

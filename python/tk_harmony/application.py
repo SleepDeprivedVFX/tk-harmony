@@ -159,7 +159,7 @@ class Application(QTcpSocketClient):
             fields["extension"] = "xstage"
 
         ctx_fields = context.as_template_fields(work_template, validate=True)
-        fields = dict(chain(fields.iteritems(), ctx_fields.iteritems()))
+        fields = dict(chain(fields.items(), ctx_fields.items()))
 
         destination_path = None
         # very cheap way to get the next available version
@@ -228,10 +228,10 @@ class Application(QTcpSocketClient):
             exclude_files.extend(glob.glob(exclude_pattern_path))
 
         # just get the filenames names from their path
-        exclude_files = map(os.path.basename, exclude_files)
+        exclude_files = list(map(os.path.basename, exclude_files))
 
         # make sure we keep the good ones!
-        exclude_files = filter(lambda x: x not in include_files, exclude_files)
+        exclude_files = list(filter(lambda x: x not in include_files, exclude_files))
 
         # rename the files from source folder to publish folder
         rename_files = {}

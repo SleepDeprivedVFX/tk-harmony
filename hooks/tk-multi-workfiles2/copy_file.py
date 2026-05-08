@@ -79,7 +79,7 @@ class CopyFile(HookClass):
                 history_dir = os.path.join(target_dir, "..", "history", now)
                 if not os.path.isdir(history_dir):
                     old_umask = os.umask(0)
-                    os.makedirs(history_dir, 0777)
+                    os.makedirs(history_dir, 0o777)
                     os.umask(old_umask)
                 shutil.move(target_dir, history_dir)
         
@@ -87,7 +87,7 @@ class CopyFile(HookClass):
         if not os.path.isdir(target_dir):
             app.log_debug("CopyFile Hook - target_dir does not exist")
             old_umask = os.umask(0)
-            os.makedirs(target_dir, 0777)
+            os.makedirs(target_dir, 0o777)
             os.umask(old_umask)
             
         # copy the file renamed to whatever is mean to be

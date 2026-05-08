@@ -13,7 +13,7 @@ Menu handling for Toon Boom Harmony
 
 """
 
-import tank
+import sgtk
 import sys
 import os
 import unicodedata
@@ -23,7 +23,7 @@ __author__ = "Diego Garcia Huerta"
 __contact__ = "https://www.linkedin.com/in/diegogh/"
 
 
-from tank.platform.qt import QtGui, QtCore
+from sgtk.platform.qt import QtGui, QtCore
 
 
 class MenuGenerator(object):
@@ -287,8 +287,8 @@ class AppCommand(object):
         if "app" in self.properties:
             app = self.properties["app"]
             doc_url = app.documentation_url
-            if doc_url.__class__ == unicode:
-                doc_url = unicodedata.normalize("NFKD", doc_url).encode("ascii", "ignore")
+            if isinstance(doc_url, str):
+                doc_url = unicodedata.normalize("NFKD", doc_url).encode("ascii", "ignore").decode("ascii")
             return doc_url
 
         return None
