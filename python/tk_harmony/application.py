@@ -352,3 +352,9 @@ class Application(QTcpSocketClient):
             "GET_SOUND_COLUMN_FILENAMES", column_name=column_name
         )
         return result
+
+    def relink_read_node(self, node, path):
+        return self.send_and_receive_command("RELINK_READ_NODE", node=node, path=path)
+
+    def relink_sound_column(self, column_name, path):
+        return self.send_and_receive_command("RELINK_SOUND_COLUMN", column_name=column_name, path=path)
