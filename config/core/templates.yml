@@ -77,7 +77,15 @@ paths:
         definition: '@shot_publish_area_harmony/scenes/{Shot}.v{version}/{Shot}.v{version}.xstage'
         root_name: 'primary'
 
-    # sequence 
+    harmony_shot_render:
+        definition: '@shot_root/renders/harmony/{name}.v{version}.mp4'
+        root_name: 'primary'
+
+    harmony_asset_render:
+        definition: '@asset_root/renders/harmony/{name}.v{version}.mp4'
+        root_name: 'primary'
+
+    # sequence
     # define the location of a work area
     sequence_work_area_harmony:
         definition: '@sequence_root/work/harmony'
