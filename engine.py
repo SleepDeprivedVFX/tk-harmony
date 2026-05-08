@@ -22,11 +22,11 @@ import traceback
 
 from functools import wraps, partial
 
-import tank
-from tank.log import LogManager
-from tank.platform import Engine
-from tank.platform.constants import SHOTGUN_ENGINE_NAME
-from tank.platform.constants import TANK_ENGINE_INIT_HOOK_NAME
+import sgtk
+from sgtk.log import LogManager
+from sgtk.platform import Engine
+from sgtk.platform.constants import SHOTGUN_ENGINE_NAME
+from sgtk.platform.constants import TANK_ENGINE_INIT_HOOK_NAME
 
 
 __author__ = "Diego Garcia Huerta"
@@ -72,7 +72,7 @@ def refresh_engine(scene_name, prev_context):
     refresh the current engine
     """
 
-    engine = tank.platform.current_engine()
+    engine = sgtk.platform.current_engine()
 
     if not engine:
         # If we don't have an engine for some reason then we don't have
@@ -101,9 +101,9 @@ def refresh_engine(scene_name, prev_context):
     # API instance.
     try:
         # and construct the new context for this path:
-        tk = tank.tank_from_path(new_path)
+        tk = sgtk.tank_from_path(new_path)
         ctx = tk.context_from_path(new_path, prev_context)
-    except tank.TankError as e:
+    except sgtk.TankError as e:
         try:
             # could not detect context from path, will use the project context
             # for menus if it exists
@@ -118,7 +118,7 @@ def refresh_engine(scene_name, prev_context):
             )
             engine.show_warning(message)
 
-        except tank.TankError as e:
+        except sgtk.TankError as e:
             (exc_type, exc_value, exc_traceback) = sys.exc_info()
             message = ""
             message += "Shotgun Harmony Engine cannot be started:.\n"
@@ -208,7 +208,7 @@ class HarmonyEngine(Engine):
         Resources reside in the core/platform/qt folder.
         :return: full path
         """
-        tank_platform_folder = os.path.abspath(inspect.getfile(tank.platform))
+        tank_platform_folder = os.path.abspath(inspect.getfile(sgtk.platform))
         return os.path.join(tank_platform_folder, "qt", filename)
 
     @property
@@ -290,7 +290,7 @@ class HarmonyEngine(Engine):
         if self._dcc_app:
             self._dcc_app.broadcast_event("ENGINE_RESTART")
 
-        from tank.platform import restart
+        from sgtk.platform import restart
 
         restart(*args, **kwargs)
 
@@ -337,7 +337,7 @@ class HarmonyEngine(Engine):
         # check that we are running an ok version of Toon Boom Harmony
         current_os = sys.platform
         if current_os not in ["darwin", "win32", "linux64"]:
-            raise tank.TankError(
+            raise sgtk.TankError(
                 "The current platform is not supported!"
                 " Supported platforms "
                 "are Mac, Linux 64 and Windows 64."
@@ -351,7 +351,7 @@ class HarmonyEngine(Engine):
                 "Shotgun integration is not compatible with Toon Boom "
                 "Harmony versions older than %02f.x" % MIN_DCC_VERSION
             )
-            raise tank.TankError(msg)
+            raise sgtk.TankError(msg)
 
         if app_version > MIN_DCC_VERSION:
             # show a warning that this version of Toon Boom Harmony isn't yet fully tested
@@ -436,7 +436,7 @@ class HarmonyEngine(Engine):
         # check that we are running an ok version of Harmony
         current_os = sys.platform
         if current_os not in ["darwin", "win32", "linux64"]:
-            raise tank.TankError(
+            raise sgtk.TankError(
                 "The current platform is not supported!"
                 " Supported platforms "
                 "are Mac, Linux 64 and Windows 64."
@@ -524,7 +524,7 @@ class HarmonyEngine(Engine):
         self.create_shotgun_menu()
 
         # make sure we setup this engine as the current engine for the platform
-        tank.platform.engine.set_current_engine(self)
+        sgtk.platform.engine.set_current_engine(self)
 
         # wait until we connected to the dcc app, we do it at this stage as
         # harmony might have already finished loading.
@@ -579,7 +579,7 @@ class HarmonyEngine(Engine):
         # Build a dictionary mapping app instance names to dictionaries of
         # commands they registered with the engine.
         app_instance_commands = {}
-        for (cmd_name, value) in self.commands.iteritems():
+        for (cmd_name, value) in self.commands.items():
             app_instance = value["properties"].get("app")
             if app_instance:
                 # Add entry 'command name: command function' to the command
@@ -609,7 +609,7 @@ class HarmonyEngine(Engine):
             else:
                 if not setting_cmd_name:
                     # Run all commands of the given app instance.
-                    for (cmd_name, command_function) in cmd_dict.iteritems():
+                    for (cmd_name, command_function) in cmd_dict.items():
                         msg = (
                             "%s startup running app '%s' command '%s'.",
                             self.name,
