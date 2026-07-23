@@ -49,6 +49,10 @@ settings.tk-multi-publish2.harmony.asset_step:
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
     settings:
         Publish Template: harmony_asset_template_publish
+  - name: Publish Harmony Palette
+    hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_palette.py"
+    settings:
+        Publish Template: harmony_asset_palette_publish
   help_url: *help_url
   location: "@apps.tk-multi-publish2.location"
 
@@ -107,6 +111,10 @@ settings.tk-multi-publish2.harmony.shot_step:
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
     settings:
         Publish Template: harmony_shot_template_publish
+  - name: Publish Harmony Palette
+    hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_palette.py"
+    settings:
+        Publish Template: harmony_shot_palette_publish
   help_url: *help_url
   location: "@apps.tk-multi-publish2.location"
 

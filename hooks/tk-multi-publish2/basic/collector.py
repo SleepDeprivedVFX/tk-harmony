@@ -22,6 +22,7 @@ HookBaseClass = sgtk.get_hook_baseclass()
 
 SESSION_PUBLISHED_TYPE = "Toon Boom Harmony Project File"
 TEMPLATE_PUBLISHED_TYPE = "Harmony Template"
+PALETTE_PUBLISHED_TYPE = "Harmony Palette"
 
 
 class HarmonySessionCollector(HookBaseClass):
@@ -97,6 +98,10 @@ class HarmonySessionCollector(HookBaseClass):
         # create an item for every publishable .tpl template found in the
         # work area's templates/ folder
         self.collect_harmony_templates(settings, parent_item)
+
+        # create an item for every palette found in the current scene's own
+        # palette-library folder
+        self.collect_harmony_palettes(settings, parent_item)
 
     def get_export_path(self, settings):
         publisher = self.parent
@@ -240,3 +245,59 @@ class HarmonySessionCollector(HookBaseClass):
                 self.logger.info("Collected Harmony template: %s" % entry)
 
         return template_items
+
+    def collect_harmony_palettes(self, settings, parent_item):
+        """
+        Creates one item per .plt palette found in the current scene's own
+        palette-library/ folder (a sibling of the .xstage, always present in
+        a Harmony project's directory structure). Scoped to scene-local
+        palettes only — shared job/environment-level palette libraries are
+        not scanned.
+
+        A scene's palette-library/ folder routinely holds several palettes
+        at once (e.g. a default one, an unused leftover, one or two actual
+        character palettes) and which one(s) should be published varies
+        publish to publish, so unlike collect_harmony_templates() these
+        items are NOT checked by default — see publish_palette.py's
+        accept(). The artist picks per-publish which palette(s) to check in
+        the Publish2 dialog.
+
+        :param parent_item: Parent Item instance
+        :returns: list of items of type harmony.palette
+        """
+        engine = sgtk.platform.current_engine()
+
+        current_path = engine.app.get_current_project_path()
+        if not current_path or current_path == "Unknown":
+            self.logger.debug(
+                "No current Harmony project path — skipping palette collection."
+            )
+            return []
+
+        palette_library_dir = os.path.join(
+            os.path.dirname(current_path), "palette-library"
+        )
+        if not os.path.isdir(palette_library_dir):
+            return []
+
+        palette_items = []
+        for entry in sorted(os.listdir(palette_library_dir)):
+            plt_path = os.path.join(palette_library_dir, entry)
+            if os.path.isfile(plt_path) and entry.lower().endswith(".plt"):
+                display_name = os.path.splitext(entry)[0]
+
+                palette_item = parent_item.create_item(
+                    "harmony.palette", "Harmony Palette", display_name
+                )
+                icon_path = os.path.join(
+                    self.disk_location, os.pardir, "icons", "texture.png"
+                )
+                palette_item.set_icon_from_path(icon_path)
+
+                palette_item.properties["path"] = plt_path
+                palette_item.properties["publish_type"] = PALETTE_PUBLISHED_TYPE
+
+                palette_items.append(palette_item)
+                self.logger.info("Collected Harmony palette: %s" % entry)
+
+        return palette_items

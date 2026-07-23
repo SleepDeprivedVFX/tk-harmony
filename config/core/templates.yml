@@ -62,6 +62,13 @@ paths:
         definition: '@asset_publish_area_harmony/templates/{Asset}_{name}.v{version}.tpl'
         root_name: 'primary'
 
+    # Harmony palette (.plt) — a single palette file published from the
+    # current scene's own palette-library/ folder, so it can be reused via
+    # the Loader.
+    harmony_asset_palette_publish:
+        definition: '@asset_publish_area_harmony/palettes/{Asset}_{name}.v{version}.plt'
+        root_name: 'primary'
+
     # Harmony render output — the Write node's image sequence and the
     # FFmpeg-transcoded movie both live in the same per-version folder
     # under publish/, not off in a separate top-level "renders" area.
@@ -110,6 +117,12 @@ paths:
     # above.
     harmony_shot_template_publish:
         definition: '@shot_publish_area_harmony/templates/{Shot}_{name}.v{version}.tpl'
+        root_name: 'primary'
+
+    # Harmony palette (.plt) — see comment on harmony_asset_palette_publish
+    # above.
+    harmony_shot_palette_publish:
+        definition: '@shot_publish_area_harmony/palettes/{Shot}_{name}.v{version}.plt'
         root_name: 'primary'
 
     # Harmony render output — see comment on harmony_asset_render_area above.
