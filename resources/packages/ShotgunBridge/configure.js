@@ -1407,6 +1407,17 @@ function Engine()
         }
         scene.endUndoRedoAccum();
 
+        // DIAGNOSTIC (temporary — remove once the render pipeline is
+        // confirmed working live): setTextAttr() does not throw when
+        // Harmony rejects a value it doesn't like (e.g. an invalid
+        // DRAWING_TYPE silently falls back to TGA) — read the attributes
+        // straight back so the log shows what Harmony actually stored,
+        // not just what we tried to set.
+        self.log_warning("DIAGNOSTIC CONFIGURE_WRITE_NODE readback: DRAWING_TYPE="
+            + node.getTextAttr(write_node, 1, "DRAWING_TYPE")
+            + " DRAWING_NAME=" + node.getTextAttr(write_node, 1, "DRAWING_NAME")
+            + " LEADING_ZEROS=" + node.getTextAttr(write_node, 1, "LEADING_ZEROS"));
+
         return write_node;
     };
 

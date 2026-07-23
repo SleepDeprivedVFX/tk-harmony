@@ -9,6 +9,7 @@
 # not expressly granted therein are reserved by Shotgun Software Inc.
 
 import os
+import re
 import sys
 import glob
 import json
@@ -510,9 +511,16 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         # save scene before rendering
         engine.app.save_project()
 
-        engine.app.configure_write_node(
+        write_node = engine.app.configure_write_node(
             output_dir=output_dir, base_name=base_name, file_format=image_format
         )
+        if not write_node:
+            raise Exception(
+                "CONFIGURE_WRITE_NODE failed in Harmony (no WRITE node found, "
+                "or Harmony rejected the requested attribute values) — see "
+                "Harmony's Message Log for the underlying error. Aborting "
+                "instead of rendering to an uncontrolled location/format."
+            )
 
         status_path = os.path.join(
             tempfile.gettempdir(), "harmony_render_{}.json".format(uuid.uuid4().hex)
@@ -568,6 +576,20 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
 
         self.logger.info("Harmony render completed successfully.")
 
+    def _native_frame_number(self, path):
+        """
+        Sort key for Harmony's native frame output. Harmony's default
+        naming (e.g. "SceneName-1.tga") has no zero-padding, so a plain
+        string sort interleaves frame numbers of different digit counts
+        (1, 10, 11, ..., 19, 2, 20, ...) instead of numeric order — this
+        was the exact cause of a reproducible frame-reordering bug where
+        recovered sequences were scrambled in a repeating block-of-11-ish
+        pattern. Extract the trailing digit run immediately before the
+        extension (the frame number) and sort on that as an int instead.
+        """
+        match = re.search(r"(\d+)(?=\.\w+$)", os.path.basename(path))
+        return int(match.group(1)) if match else -1
+
     def _recover_frames_from_native_output(self, engine, output_dir, base_name):
         """
         CONFIGURE_WRITE_NODE's redirect of the Write node's output is
@@ -589,7 +611,10 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
 
         found = []
         for ext in FALLBACK_FRAME_EXTENSIONS:
-            found = sorted(glob.glob(os.path.join(native_frames_dir, "*." + ext)))
+            found = sorted(
+                glob.glob(os.path.join(native_frames_dir, "*." + ext)),
+                key=self._native_frame_number,
+            )
             if found:
                 break
 
