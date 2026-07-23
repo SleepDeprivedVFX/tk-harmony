@@ -19,8 +19,9 @@ from sgtk.errors import TankError
 HookClass = sgtk.get_hook_baseclass()
 
 
-__author__ = "Diego Garcia Huerta"
-__contact__ = "https://www.linkedin.com/in/diegogh/"
+__author__ = "Adam Benson"
+__contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
+# based on original work by Diego Garcia Huerta and developed later by Adam Benson
 
 
 class SceneOperation(HookClass):

@@ -18,8 +18,9 @@ import sys
 import traceback
 
 
-__author__ = "Diego Garcia Huerta"
-__contact__ = "https://www.linkedin.com/in/diegogh/"
+__author__ = "Adam Benson"
+__contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
+# based on original work by Diego Garcia Huerta and developed later by Adam Benson
 
 
 def display_error(msg, logger=None):

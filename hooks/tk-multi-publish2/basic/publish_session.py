@@ -17,8 +17,8 @@ import traceback
 import sgtk
 
 
-__author__ = "Diego Garcia Huerta"
-__contact__ = "https://www.linkedin.com/in/diegogh/"
+__author__ = "Adam Benson"
+__contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 
 
 HookBaseClass = sgtk.get_hook_baseclass()

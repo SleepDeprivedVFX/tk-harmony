@@ -22,8 +22,9 @@ from sgtk.platform.errors import TankEngineInitError
 from sgtk.platform import SoftwareLauncher, SoftwareVersion, LaunchInformation
 
 
-__author__ = "Diego Garcia Huerta"
-__contact__ = "https://www.linkedin.com/in/diegogh/"
+__author__ = "Adam Benson"
+__contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
+# based on original work by Diego Garcia Huerta and developed later by Adam Benson
 
 
 logger = sgtk.LogManager.get_logger(__name__)
@@ -163,7 +164,7 @@ class HarmonyLauncher(SoftwareLauncher):
         """
         The minimum software version that is supported by the launcher.
         """
-        return "16.0"
+        return "25.0"
 
     def prepare_launch(self, exec_path, args, file_to_open=None):
         """
