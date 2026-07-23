@@ -23,6 +23,7 @@ HookBaseClass = sgtk.get_hook_baseclass()
 SESSION_PUBLISHED_TYPE = "Toon Boom Harmony Project File"
 TEMPLATE_PUBLISHED_TYPE = "Harmony Template"
 PALETTE_PUBLISHED_TYPE = "Harmony Palette"
+ELEMENT_PUBLISHED_TYPE = "Harmony Element"
 
 
 class HarmonySessionCollector(HookBaseClass):
@@ -102,6 +103,10 @@ class HarmonySessionCollector(HookBaseClass):
         # create an item for every palette found in the current scene's own
         # palette-library folder
         self.collect_harmony_palettes(settings, parent_item)
+
+        # create an item for every element found in the current scene's own
+        # elements folder
+        self.collect_harmony_elements(settings, parent_item)
 
     def get_export_path(self, settings):
         publisher = self.parent
@@ -262,6 +267,14 @@ class HarmonySessionCollector(HookBaseClass):
         accept(). The artist picks per-publish which palette(s) to check in
         the Publish2 dialog.
 
+        All palette items are nested under a single "Palettes" group item,
+        collapsed by default (Item.expanded = False) — a flat list of many
+        palettes/elements otherwise makes the Publish2 tree unwieldy to
+        scan. The group is only created if at least one palette is found,
+        and it has no publish plugin of its own (no item_filters match it),
+        so it's purely organizational — skipped during actual publish,
+        just a collapsible parent in the UI.
+
         :param parent_item: Parent Item instance
         :returns: list of items of type harmony.palette
         """
@@ -280,17 +293,40 @@ class HarmonySessionCollector(HookBaseClass):
         if not os.path.isdir(palette_library_dir):
             return []
 
+        icon_path = os.path.join(
+            self.disk_location, os.pardir, "icons", "texture.png"
+        )
+
         palette_items = []
+        palettes_group = None
         for entry in sorted(os.listdir(palette_library_dir)):
             plt_path = os.path.join(palette_library_dir, entry)
             if os.path.isfile(plt_path) and entry.lower().endswith(".plt"):
+                if palettes_group is None:
+                    # tk-multi-publish2's own built-in expand/collapse arrow
+                    # never renders for this kind of item: publish_tree_
+                    # widget.py's _build_item_tree_r() calls
+                    # update_expand_indicator() (which decides visibility by
+                    # counting the item's current Qt children) BEFORE the
+                    # loop that adds sub-item children — only items with
+                    # their own attached task (added earlier in that same
+                    # function) have a child yet at that point. A pure
+                    # group item like this, with sub-items but no task of
+                    # its own, always fails that check. Confirmed as an
+                    # upstream app bug, not fixable from a hook — so the
+                    # name itself spells out the interaction instead of
+                    # relying on an indicator that won't appear.
+                    palettes_group = parent_item.create_item(
+                        "harmony.palette_group", "Harmony Palettes",
+                        "Palettes (double-click to expand)",
+                    )
+                    palettes_group.expanded = False
+                    palettes_group.set_icon_from_path(icon_path)
+
                 display_name = os.path.splitext(entry)[0]
 
-                palette_item = parent_item.create_item(
+                palette_item = palettes_group.create_item(
                     "harmony.palette", "Harmony Palette", display_name
-                )
-                icon_path = os.path.join(
-                    self.disk_location, os.pardir, "icons", "texture.png"
                 )
                 palette_item.set_icon_from_path(icon_path)
 
@@ -301,3 +337,71 @@ class HarmonySessionCollector(HookBaseClass):
                 self.logger.info("Collected Harmony palette: %s" % entry)
 
         return palette_items
+
+    def collect_harmony_elements(self, settings, parent_item):
+        """
+        Creates one item per element found in the current scene's own
+        elements/ folder (a sibling of the .xstage, like palette-library/).
+        An element is a subfolder (e.g. elements/Shotgun_Banner/) that can
+        hold one or several drawings/timings (e.g. a turnaround's multiple
+        angles) plus a Harmony-managed .thumbnails/ cache. Scoped to
+        scene-local elements only.
+
+        Like palette-library/, a scene's elements/ folder accumulates
+        unused/WIP subfolders over a project's life, so these items are
+        NOT checked by default — see publish_element.py's accept(). The
+        artist picks per-publish which element(s) to check.
+
+        All element items are nested under a single "Elements" group item,
+        collapsed by default (Item.expanded = False) — same reasoning as
+        collect_harmony_palettes()'s "Palettes" group.
+
+        :param parent_item: Parent Item instance
+        :returns: list of items of type harmony.element
+        """
+        engine = sgtk.platform.current_engine()
+
+        current_path = engine.app.get_current_project_path()
+        if not current_path or current_path == "Unknown":
+            self.logger.debug(
+                "No current Harmony project path — skipping element collection."
+            )
+            return []
+
+        elements_dir = os.path.join(os.path.dirname(current_path), "elements")
+        if not os.path.isdir(elements_dir):
+            return []
+
+        icon_path = os.path.join(
+            self.disk_location, os.pardir, "icons", "publish.png"
+        )
+
+        element_items = []
+        elements_group = None
+        for entry in sorted(os.listdir(elements_dir)):
+            element_path = os.path.join(elements_dir, entry)
+            if os.path.isdir(element_path):
+                if elements_group is None:
+                    # see the matching comment in collect_harmony_palettes()
+                    # — the built-in expand arrow never renders for a pure
+                    # group item (confirmed upstream app bug, not fixable
+                    # from a hook), so the name spells out the interaction.
+                    elements_group = parent_item.create_item(
+                        "harmony.element_group", "Harmony Elements",
+                        "Elements (double-click to expand)",
+                    )
+                    elements_group.expanded = False
+                    elements_group.set_icon_from_path(icon_path)
+
+                element_item = elements_group.create_item(
+                    "harmony.element", "Harmony Element", entry
+                )
+                element_item.set_icon_from_path(icon_path)
+
+                element_item.properties["path"] = element_path
+                element_item.properties["publish_type"] = ELEMENT_PUBLISHED_TYPE
+
+                element_items.append(element_item)
+                self.logger.info("Collected Harmony element: %s" % entry)
+
+        return element_items

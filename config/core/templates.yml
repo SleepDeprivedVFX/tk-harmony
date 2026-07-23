@@ -69,6 +69,14 @@ paths:
         definition: '@asset_publish_area_harmony/palettes/{Asset}_{name}.v{version}.plt'
         root_name: 'primary'
 
+    # Harmony element (a drawing or set of drawings, e.g. a turnaround or a
+    # prop) published from the current scene's own elements/ folder. Like
+    # .tpl, the folder itself IS the published item (no filename
+    # component) — mirrors harmony_asset_render_area's bare-folder shape.
+    harmony_asset_element_publish:
+        definition: '@asset_publish_area_harmony/elements/{Asset}_{name}.v{version}'
+        root_name: 'primary'
+
     # Harmony render output — the Write node's image sequence and the
     # FFmpeg-transcoded movie both live in the same per-version folder
     # under publish/, not off in a separate top-level "renders" area.
@@ -123,6 +131,11 @@ paths:
     # above.
     harmony_shot_palette_publish:
         definition: '@shot_publish_area_harmony/palettes/{Shot}_{name}.v{version}.plt'
+        root_name: 'primary'
+
+    # Harmony element — see comment on harmony_asset_element_publish above.
+    harmony_shot_element_publish:
+        definition: '@shot_publish_area_harmony/elements/{Shot}_{name}.v{version}'
         root_name: 'primary'
 
     # Harmony render output — see comment on harmony_asset_render_area above.
