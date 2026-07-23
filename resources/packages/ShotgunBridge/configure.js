@@ -217,6 +217,94 @@ function dropFileInNewElement( root, filename, transparency, alignmentRule )
   return read; // name of the new drawing layer
 }
 
+/*
+  given an ORDERED list of files (already sorted correctly by the Python
+  caller — do not re-sort here, alphabetical sort of unpadded frame
+  numbers was the exact cause of a previous scrambled-sequence bug, see
+  publish_render.py's _native_frame_number), create ONE new element/
+  column/READ node and import every file into it as a separate drawing
+  timing, exposed sequentially. Used both for reloading a published
+  Harmony Element (multiple drawings/timings, e.g. a turnaround) and for
+  reloading a published Rendered Image sequence — same underlying shape,
+  an element identified by many files rather than one.
+
+  @returns the name of the read node created so that it can be connected
+  to the graph, or null if file_paths was empty / an unknown file type.
+*/
+function importElementFromFiles( root, element_name, file_paths, transparency, alignmentRule )
+{
+  if (!file_paths || file_paths.length === 0)
+    return null;
+
+  var vectorFormat = null;
+  var first = file_paths[0];
+  var pos = first.lastIndexOf( "." );
+  if( pos < 0 )
+    return null;
+
+  var extension = first.substr(pos + 1).toLowerCase();
+  if( extension === "jpeg" )
+    extension = "jpg";
+  if( extension === "tvg" )
+  {
+    vectorFormat = "TVG";
+    extension = "SCAN"; // element.add() will use this.
+  }
+
+  var elemId = element.add(element_name, "BW", scene.numberOfUnitsZ(), extension.toUpperCase(), vectorFormat);
+  if ( elemId === -1 )
+  {
+    return null;
+  }
+
+  var uniqueColumnName = getUniqueColumnName(element_name);
+  column.add(uniqueColumnName, "DRAWING");
+  column.setElementIdOfDrawing( uniqueColumnName, elemId );
+
+  var read = node.add(root, element_name, "READ", 0, 0, 0);
+  var transparencyAttr = node.getAttr(read, frame.current(), "READ_TRANSPARENCY");
+  var opacityAttr      = node.getAttr(read, frame.current(), "OPACITY");
+  transparencyAttr.setValue(true);
+  opacityAttr.setValue(transparency);
+
+  var alignmentAttr = node.getAttr(read, frame.current(), "ALIGNMENT_RULE");
+  alignmentAttr.setValue(alignmentRule);
+
+  var transparencyModeAttr = node.getAttr(read, frame.current(), "applyMatteToColor");
+  if (extension === "png")
+    transparencyModeAttr.setValue(PNGTransparencyMode);
+  if (extension === "tga")
+    transparencyModeAttr.setValue(TGATransparencyMode);
+  if (extension === "sgi")
+    transparencyModeAttr.setValue(SGITransparencyMode);
+  if (extension === "psd")
+    transparencyModeAttr.setValue(FlatPSDTransparencyMode);
+
+  node.linkAttr(read, "DRAWING.ELEMENT", uniqueColumnName);
+
+  for (var i = 0; i < file_paths.length; i++)
+  {
+    // preserve the original drawing/timing name if the filename ends in
+    // digits (e.g. "Prop-3.tvg" -> timing "3"), falling back to
+    // sequential numbering — keeps fidelity with the source element
+    // rather than silently renaming every drawing "1", "2", "3"...
+    var srcFile = file_paths[i];
+    var match = srcFile.match(/(\d+)\.\w+$/);
+    var timing = match ? match[1] : String(i + 1);
+
+    Drawing.create(elemId, timing, true);
+    var drawingFilePath = Drawing.filename(elemId, timing);
+    copyFile( srcFile, drawingFilePath );
+
+    // exposed at sequential FRAME positions (1, 2, 3...) regardless of
+    // the original timing name — a freshly-loaded element should play
+    // its drawings back-to-back from frame 1.
+    column.setEntry(uniqueColumnName, 1, i + 1, timing);
+  }
+
+  return read;
+}
+
 function dropMovieInNewElement( root, filename, transparency, alignmentRule, progress_callback )
 {
   var extension = "png";
@@ -1225,6 +1313,107 @@ function Engine()
         return read_node;
     };
 
+    self.import_element_files = function(data)
+    {
+        // used for both Harmony Element (multi-drawing) and Rendered
+        // Image sequence reload — see importElementFromFiles() above.
+        // Python resolves and sorts file_paths before this is called;
+        // this function does not touch the filesystem beyond the copies
+        // importElementFromFiles() itself performs.
+        scene.beginUndoRedoAccum("Import Element");
+        var element_name = data.element_name;
+        var file_paths    = data.file_paths;
+        var read_node = null;
+        try
+        {
+            // null/null matches import_image()'s own established
+            // transparency/alignmentRule defaults for a freshly dropped
+            // element, rather than guessing a new value.
+            read_node = importElementFromFiles(node.root(), element_name, file_paths, null, null);
+            if (read_node !== null)
+            {
+                setNodeMetadata(read_node, META_SHOTGUN_PATH, data.source_path || "");
+            }
+        }
+        catch(e)
+        {
+            scene.cancelUndoRedoAccum();
+            self.log_exception("IMPORT_ELEMENT_FILES failed: " + e);
+            return false;
+        }
+        scene.endUndoRedoAccum();
+        return read_node;
+    };
+
+    self.import_palette = function(data)
+    {
+        // Guaranteed-value baseline: a Harmony palette IS just a .plt
+        // file sitting in the scene's own palette-library/ folder
+        // (confirmed on disk via the startup/newfile templates while
+        // building the Palette publisher) — so copying the published
+        // .plt in there is real, working functionality on its own, with
+        // no dependency on any uncertain scripting API.
+        //
+        // NOT LIVE-VERIFIED, best-effort ONLY: this also attempts to
+        // register the palette with PaletteObjectManager so it shows up
+        // in the Palette panel immediately without a scene reload. The
+        // exact scripting API for "import an existing .plt's contents"
+        // (as opposed to creating a new empty palette) is unconfirmed for
+        // this Harmony version — wrapped in its own try/catch so a
+        // failure here does NOT undo the file copy above. If this
+        // doesn't work live, the palette should still appear the next
+        // time the scene is opened, or via Harmony's own Palette panel
+        // "Import Palette" pointed at the copied file.
+        var source_path = data.path;
+
+        try
+        {
+            var project_folder = scene.currentProjectPath();
+            var palette_library_dir = project_folder + "/palette-library";
+
+            var baseName = basename(source_path);
+            var destPath = palette_library_dir + "/" + baseName + ".plt";
+
+            // avoid clobbering an existing palette of the same name
+            var suffix = 0;
+            while ((new PermanentFile(destPath)).exists())
+            {
+                suffix += 1;
+                destPath = palette_library_dir + "/" + baseName + "_" + suffix + ".plt";
+            }
+
+            copyFile(source_path, destPath);
+
+            var live_registered = false;
+            try
+            {
+                // DIAGNOSTIC / NOT LIVE-VERIFIED — report what's actually
+                // available so this can be corrected against ground truth.
+                self.log_warning("DIAGNOSTIC IMPORT_PALETTE PaletteObjectManager available: "
+                    + (typeof PaletteObjectManager !== "undefined"));
+                if (typeof PaletteObjectManager !== "undefined")
+                {
+                    var paletteList = PaletteObjectManager.getScenePaletteList();
+                    // best-effort guess at the scripting call — unconfirmed.
+                    paletteList.insertPaletteFile(destPath, paletteList.numPalettes, baseName, false);
+                    live_registered = true;
+                }
+            }
+            catch(liveErr)
+            {
+                self.log_warning("DIAGNOSTIC IMPORT_PALETTE live registration failed (file copy "
+                    + "still succeeded, palette will appear on next scene open): " + liveErr);
+            }
+
+            return { "success": true, "path": destPath, "live_registered": live_registered };
+        }
+        catch(e)
+        {
+            self.log_exception("IMPORT_PALETTE failed: " + e);
+            return { "success": false, "error": e.toString() };
+        }
+    };
+
     self.import_template = function(data)
     {
         // NOT LIVE-VERIFIED — needs Sarah to confirm against Harmony 25.2
@@ -1546,6 +1735,81 @@ function Engine()
         return true;  // Immediate acknowledgement — render happens asynchronously
     };
 
+    self.export_camera_data = function(data)
+    {
+        // NOT LIVE-VERIFIED. Nothing in this codebase has touched a
+        // Camera/Peg node before this — the attribute names below
+        // (POSITION.X/Y/Z, SCALE.X/Y, ANGLE) are standard Toon Boom
+        // Harmony scripting conventions but are UNCONFIRMED against this
+        // studio's actual Harmony version. A raw node.getAttrList() dump
+        // is logged below (same technique that found the real Write node
+        // attributes in an earlier session) specifically so a wrong guess
+        // here is easy to correct from the Message Log rather than
+        // silently producing bogus data.
+        var camera_node  = data.camera_node;
+        var start_frame  = data.start_frame;
+        var stop_frame   = data.stop_frame;
+
+        try
+        {
+            self.log_warning("DIAGNOSTIC EXPORT_CAMERA_DATA attributes on "
+                + camera_node + ": " + JSON.stringify(node.getAttrList(camera_node, 1)));
+
+            // node.parentNode() is Harmony's animation-parenting call —
+            // the node a given node is pegged to, which is what actually
+            // drives its combined on-screen transform if the camera
+            // itself is left static and a Peg above it carries the move.
+            // NOT LIVE-VERIFIED: unconfirmed this returns "" / "Top" at
+            // the scene root rather than some other sentinel.
+            var parent_peg = node.parentNode(camera_node);
+            if (parent_peg === "Top" || parent_peg === "")
+            {
+                parent_peg = null;
+            }
+            else
+            {
+                self.log_warning("DIAGNOSTIC EXPORT_CAMERA_DATA attributes on "
+                    + "driving peg " + parent_peg + ": "
+                    + JSON.stringify(node.getAttrList(parent_peg, 1)));
+            }
+
+            function readTransform(nodeName, atFrame)
+            {
+                return {
+                    "x":     node.getAttr(nodeName, atFrame, "POSITION.X").doubleValue(),
+                    "y":     node.getAttr(nodeName, atFrame, "POSITION.Y").doubleValue(),
+                    "z":     node.getAttr(nodeName, atFrame, "POSITION.Z").doubleValue(),
+                    "scale_x": node.getAttr(nodeName, atFrame, "SCALE.X").doubleValue(),
+                    "scale_y": node.getAttr(nodeName, atFrame, "SCALE.Y").doubleValue(),
+                    "angle":   node.getAttr(nodeName, atFrame, "ANGLE").doubleValue()
+                };
+            }
+
+            var frames = [];
+            for (var f = start_frame; f <= stop_frame; f++)
+            {
+                var record = { "frame": f, "camera": readTransform(camera_node, f) };
+                if (parent_peg !== null)
+                {
+                    record["peg"] = readTransform(parent_peg, f);
+                }
+                frames.push(record);
+            }
+
+            return {
+                "success": true,
+                "camera_node": camera_node,
+                "parent_peg": parent_peg,
+                "frames": frames
+            };
+        }
+        catch(e)
+        {
+            self.log_exception("EXPORT_CAMERA_DATA failed: " + e);
+            return { "success": false, "error": e.toString() };
+        }
+    };
+
     // ----
     self.ping = function(data)
     {
@@ -1637,6 +1901,8 @@ function Engine()
         self.registerCallback("IMPORT_AUDIO",     self.import_audio);
         self.registerCallback("IMPORT_CLIP",      self.import_clip);
         self.registerCallback("IMPORT_TEMPLATE",  self.import_template);
+        self.registerCallback("IMPORT_ELEMENT_FILES", self.import_element_files);
+        self.registerCallback("IMPORT_PALETTE",       self.import_palette);
 
         // Metadata
         self.registerCallback("GET_NODE_METADATA",  self.get_node_metadata);
@@ -1655,6 +1921,9 @@ function Engine()
         // Render
         self.registerCallback("CONFIGURE_WRITE_NODE", self.configure_write_node);
         self.registerCallback("RENDER_SCENE", self.render_scene);
+
+        // Camera / scene data export
+        self.registerCallback("EXPORT_CAMERA_DATA", self.export_camera_data);
 
         self.registerCallback("PING",  self.ping);
         self.registerCallback("CLOSE", self.stop);

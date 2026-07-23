@@ -5,6 +5,7 @@ Module that encapsulates access to the actual application
 
 
 import os
+import re
 import glob
 import shutil
 import traceback
@@ -377,7 +378,63 @@ class Application(QTcpSocketClient):
             # same treatment later.
             result = self.send_and_receive_command("IMPORT_TEMPLATE", path=path)
 
+        if action == "palette":
+            result = self.send_and_receive_command("IMPORT_PALETTE", path=path)
+
+        if action == "element":
+            # path is the published element FOLDER — list and correctly
+            # sort its drawing files (numerically, not alphabetically —
+            # see _sorted_files_by_trailing_number's docstring for why
+            # that distinction matters) and hand the resolved list to
+            # Harmony to rebuild as one multi-drawing element.
+            element_name = os.path.basename(os.path.normpath(path))
+            file_paths = self._sorted_files_by_trailing_number(path)
+            result = self.send_and_receive_command(
+                "IMPORT_ELEMENT_FILES",
+                element_name=element_name,
+                file_paths=file_paths,
+                source_path=path,
+            )
+
+        if action == "sequence":
+            # path is a frame_spec pattern (e.g. ".../Shot_v001.%04d.png",
+            # from publisher.util.get_frame_sequence_path) — glob the
+            # actual frame files it represents, in the same folder.
+            sequence_dir = os.path.dirname(path)
+            glob_pattern = re.sub(r"%0\d*d", "*", os.path.basename(path))
+            file_paths = self._sorted_files_by_trailing_number(
+                sequence_dir, glob_pattern=glob_pattern
+            )
+            element_name = os.path.splitext(os.path.basename(path))[0]
+            result = self.send_and_receive_command(
+                "IMPORT_ELEMENT_FILES",
+                element_name=element_name,
+                file_paths=file_paths,
+                source_path=path,
+            )
+
         return result
+
+    def _sorted_files_by_trailing_number(self, folder, glob_pattern="*"):
+        """
+        Lists files in folder matching glob_pattern, sorted by the
+        trailing digit run before each file's extension (numerically, not
+        alphabetically) — the same fix applied to
+        publish_render.py's _native_frame_number, needed here for exactly
+        the same reason: plain alphabetical sort of unpadded/variously-
+        padded frame numbers scrambles the sequence (1, 10, 11, ..., 2,
+        20, ...).
+        """
+
+        def sort_key(file_path):
+            match = re.search(r"(\d+)(?=\.\w+$)", os.path.basename(file_path))
+            return int(match.group(1)) if match else -1
+
+        found = [
+            f.replace("\\", "/") for f in glob.glob(os.path.join(folder, glob_pattern))
+            if os.path.isfile(f)
+        ]
+        return sorted(found, key=sort_key)
 
     def get_nodes_of_type(self, node_types):
         result = self.send_and_receive_command("GET_NODES_OF_TYPE", node_types=node_types)
@@ -446,4 +503,20 @@ class Application(QTcpSocketClient):
             start_frame=start_frame,
             stop_frame=stop_frame,
             status_path=status_path,
+        )
+
+    def export_camera_data(self, camera_node, start_frame, stop_frame):
+        """
+        Reads per-frame transform data for a camera node (and its driving
+        Peg, if any) from the current scene. Uses send_and_receive (not
+        fire-and-forget) so a failure — or an empty/malformed result — is
+        surfaced immediately to the caller rather than producing a bogus
+        published file. See configure.js's export_camera_data() for the
+        NOT LIVE-VERIFIED caveats on the actual attribute names used.
+        """
+        return self.send_and_receive_command(
+            "EXPORT_CAMERA_DATA",
+            camera_node=camera_node,
+            start_frame=start_frame,
+            stop_frame=stop_frame,
         )

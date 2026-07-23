@@ -172,3 +172,25 @@ class HarmonyActions(HookBaseClass):
 
         engine = sgtk.platform.current_engine()
         result = engine.app.import_project_resource(path, action)
+
+        # NOTE: previously this result was captured and never looked at
+        # again — a failed import (or an RPC that came back False/empty)
+        # produced no error and no dialog, just silent nothing happening
+        # in Harmony. Every other silent-failure bug found in this engine
+        # (the callback dispatch fix in client.py, the render pipeline's
+        # various swallowed errors) turned out to be hiding a real
+        # problem, so surface this one too instead of assuming success.
+        if isinstance(result, dict):
+            if not result.get("success", True):
+                raise TankError(
+                    "Failed to import '%s' (action '%s'): %s"
+                    % (path, action, result.get(
+                        "error", "unknown error — check Harmony's Message Log"
+                    ))
+                )
+        elif not result:
+            raise TankError(
+                "Failed to import '%s' (action '%s') — Harmony returned no "
+                "result. Check Harmony's Message Log and the tk-harmony log "
+                "file for details." % (path, action)
+            )

@@ -28,12 +28,20 @@ settings.tk-multi-loader2.harmony:
     Movie File: [movie]
     Image: [drawing]
     Texture: [drawing]
-    Rendered Image: [drawing]
+    # was [drawing] (single-file import) — a Rendered Image PublishedFile
+    # is actually a whole sequence (frame_spec path), so it needs the
+    # multi-file element import, same as Harmony Element below.
+    Rendered Image: [sequence]
     Photoshop Image: [drawing]
     WAV File: [sound]
     Sound File: [sound]
     Audio File: [sound]
     Harmony Template: [template]
+    Harmony Palette: [palette]
+    Harmony Element: [element]
+    # Harmony Camera Data intentionally has no action mapping — it's an
+    # export for downstream tools (Nuke via .chan), not something meant
+    # to be loaded back into Harmony itself.
   entities:
   - caption: Assets
     entity_type: Asset

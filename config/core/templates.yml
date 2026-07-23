@@ -77,6 +77,16 @@ paths:
         definition: '@asset_publish_area_harmony/elements/{Asset}_{name}.v{version}'
         root_name: 'primary'
 
+    # Harmony camera data — a camera's transform animation, exported as a
+    # JSON file (source of truth) and a Nuke .chan file (Nuke's own native
+    # Camera > Import chan file format).
+    harmony_asset_camera_data_json:
+        definition: '@asset_publish_area_harmony/camera/{Asset}_{name}.v{version}.json'
+        root_name: 'primary'
+    harmony_asset_camera_data_chan:
+        definition: '@asset_publish_area_harmony/camera/{Asset}_{name}.v{version}.chan'
+        root_name: 'primary'
+
     # Harmony render output — the Write node's image sequence and the
     # FFmpeg-transcoded movie both live in the same per-version folder
     # under publish/, not off in a separate top-level "renders" area.
@@ -136,6 +146,15 @@ paths:
     # Harmony element — see comment on harmony_asset_element_publish above.
     harmony_shot_element_publish:
         definition: '@shot_publish_area_harmony/elements/{Shot}_{name}.v{version}'
+        root_name: 'primary'
+
+    # Harmony camera data — see comment on harmony_asset_camera_data_json
+    # above.
+    harmony_shot_camera_data_json:
+        definition: '@shot_publish_area_harmony/camera/{Shot}_{name}.v{version}.json'
+        root_name: 'primary'
+    harmony_shot_camera_data_chan:
+        definition: '@shot_publish_area_harmony/camera/{Shot}_{name}.v{version}.chan'
         root_name: 'primary'
 
     # Harmony render output — see comment on harmony_asset_render_area above.
