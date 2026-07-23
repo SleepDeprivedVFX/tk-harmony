@@ -32,23 +32,50 @@ paths:
         root_name: 'primary'
 
     # The location of WIP files
+    # Harmony projects are a folder (the .xstage plus sibling audio/,
+    # elements/, environments/, frames/, jobs/, palette-library/ etc.), not
+    # a single file, so every version needs its own folder — mirrors
+    # harmony_asset_publish below.
     harmony_asset_work:
-        definition: '@asset_work_area_harmony/scenes/{Asset}.v{version}.xstage'
+        definition: '@asset_work_area_harmony/scenes/{Asset}.v{version}/{Asset}.v{version}.xstage'
         root_name: 'primary'
 
     # The location of backups of WIP files
     # Note that snapshots folder is  not inside the wip folder
     # otherwise we could confuse the publishing process when files
     # need to be copied from work to publish.
+    # Same per-version folder requirement as harmony_asset_work above.
     harmony_asset_snapshot:
-        definition: '@asset_work_area_harmony/snapshots/{Asset}.v{version}.{timestamp}.xstage'
+        definition: '@asset_work_area_harmony/snapshots/{Asset}.v{version}.{timestamp}/{Asset}.v{version}.{timestamp}.xstage'
         root_name: 'primary'
 
     harmony_asset_publish:
         definition: '@asset_publish_area_harmony/scenes/{Asset}.v{version}/{Asset}.v{version}.xstage'
         root_name: 'primary'
 
-    # shot 
+    # Harmony template (.tpl) — a reusable node/asset bundle exported via
+    # Harmony's own Library panel, published through Toolkit so it can be
+    # loaded into other scenes via the Loader. Like .xstage, a .tpl IS a
+    # folder (not a single file inside a wrapper folder) — the folder
+    # itself, ending in .tpl, is the complete published item.
+    harmony_asset_template_publish:
+        definition: '@asset_publish_area_harmony/templates/{Asset}_{name}.v{version}.tpl'
+        root_name: 'primary'
+
+    # Harmony render output — the Write node's image sequence and the
+    # FFmpeg-transcoded movie both live in the same per-version folder
+    # under publish/, not off in a separate top-level "renders" area.
+    harmony_asset_render_area:
+        definition: '@asset_publish_area_harmony/renders/{Asset}_{name}.v{version}'
+        root_name: 'primary'
+    harmony_asset_render_sequence:
+        definition: '@harmony_asset_render_area/{Asset}_{name}.v{version}.{SEQ}.png'
+        root_name: 'primary'
+    harmony_asset_render_movie:
+        definition: '@harmony_asset_render_area/{Asset}_{name}.v{version}.mov'
+        root_name: 'primary'
+
+    # shot
     # define the location of a work area
     shot_work_area_harmony:
         definition: '@shot_root/work/harmony'
@@ -60,8 +87,10 @@ paths:
         root_name: 'primary'
     
     # The location of WIP files
+    # Harmony projects are a folder, not a single file — see comment on
+    # harmony_asset_work above.
     harmony_shot_work:
-        definition: '@shot_work_area_harmony/scenes/{Shot}.v{version}.xstage'
+        definition: '@shot_work_area_harmony/scenes/{Shot}.v{version}/{Shot}.v{version}.xstage'
         root_name: 'primary'
 
     # The location of backups of WIP files
@@ -69,7 +98,7 @@ paths:
     # otherwise we could confuse the publishing process when files
     # need to be copied from work to publish.
     harmony_shot_snapshot:
-        definition: '@shot_work_area_harmony/snapshots/{Shot}.v{version}.{timestamp}.xstage'
+        definition: '@shot_work_area_harmony/snapshots/{Shot}.v{version}.{timestamp}/{Shot}.v{version}.{timestamp}.xstage'
         root_name: 'primary'
 
     # The location of published harmony files
@@ -77,12 +106,21 @@ paths:
         definition: '@shot_publish_area_harmony/scenes/{Shot}.v{version}/{Shot}.v{version}.xstage'
         root_name: 'primary'
 
-    harmony_shot_render:
-        definition: '@shot_root/renders/harmony/{name}.v{version}.mp4'
+    # Harmony template (.tpl) — see comment on harmony_asset_template_publish
+    # above.
+    harmony_shot_template_publish:
+        definition: '@shot_publish_area_harmony/templates/{Shot}_{name}.v{version}.tpl'
         root_name: 'primary'
 
-    harmony_asset_render:
-        definition: '@asset_root/renders/harmony/{name}.v{version}.mp4'
+    # Harmony render output — see comment on harmony_asset_render_area above.
+    harmony_shot_render_area:
+        definition: '@shot_publish_area_harmony/renders/{Shot}_{name}.v{version}'
+        root_name: 'primary'
+    harmony_shot_render_sequence:
+        definition: '@harmony_shot_render_area/{Shot}_{name}.v{version}.{SEQ}.png'
+        root_name: 'primary'
+    harmony_shot_render_movie:
+        definition: '@harmony_shot_render_area/{Shot}_{name}.v{version}.mov'
         root_name: 'primary'
 
     # sequence
@@ -97,16 +135,18 @@ paths:
         root_name: 'primary'
     
     # The location of WIP files
+    # Harmony projects are a folder, not a single file — see comment on
+    # harmony_asset_work above.
     harmony_sequence_work:
-        definition: '@sequence_work_area_harmony/scenes/{Sequence}.v{version}.xstage'
+        definition: '@sequence_work_area_harmony/scenes/{Sequence}.v{version}/{Sequence}.v{version}.xstage'
         root_name: 'primary'
-    
+
     # The location of backups of WIP files
     # Note that snapshots folder is  not inside the wip folder
     # otherwise we could confuse the publishing process when files
     # need to be copied from work to publish.
     harmony_sequence_snapshot:
-        definition: '@sequence_work_area_harmony/snapshots/{Sequence}.v{version}.{timestamp}.xstage'
+        definition: '@sequence_work_area_harmony/snapshots/{Sequence}.v{version}.{timestamp}/{Sequence}.v{version}.{timestamp}.xstage'
         root_name: 'primary'
     
     # The location of published harmony files

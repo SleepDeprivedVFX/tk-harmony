@@ -23,6 +23,7 @@ settings.tk-multi-publish2.harmony.asset_step:
   collector: "{self}/collector.py:{engine}/tk-multi-publish2/basic/collector.py"
   collector_settings:
       Work Template: harmony_asset_work
+      Template Work Area: asset_work_area_harmony
   publish_plugins:
   - name: Publish to Shotgun
     hook: "{self}/publish_file.py"
@@ -40,9 +41,14 @@ settings.tk-multi-publish2.harmony.asset_step:
   - name: Publish Harmony Render to ShotGrid
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_render.py"
     settings:
-        Render Template: harmony_asset_render
+        Render Sequence Template: harmony_asset_render_sequence
+        Render Movie Template: harmony_asset_render_movie
         FFmpeg Path: ffmpeg
-        Image Format: PNG4
+        Image Format: PNG
+  - name: Publish Harmony Template
+    hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
+    settings:
+        Publish Template: harmony_asset_template_publish
   help_url: *help_url
   location: "@apps.tk-multi-publish2.location"
 
@@ -75,6 +81,7 @@ settings.tk-multi-publish2.harmony.shot_step:
   collector: "{self}/collector.py:{engine}/tk-multi-publish2/basic/collector.py"
   collector_settings:
       Work Template: harmony_shot_work
+      Template Work Area: shot_work_area_harmony
   publish_plugins:
   - name: Publish to Shotgun
     hook: "{self}/publish_file.py"
@@ -92,9 +99,14 @@ settings.tk-multi-publish2.harmony.shot_step:
   - name: Publish Harmony Render to ShotGrid
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_render.py"
     settings:
-        Render Template: harmony_shot_render
+        Render Sequence Template: harmony_shot_render_sequence
+        Render Movie Template: harmony_shot_render_movie
         FFmpeg Path: ffmpeg
-        Image Format: PNG4
+        Image Format: PNG
+  - name: Publish Harmony Template
+    hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
+    settings:
+        Publish Template: harmony_shot_template_publish
   help_url: *help_url
   location: "@apps.tk-multi-publish2.location"
 

@@ -344,7 +344,13 @@ class HarmonyEngine(Engine):
             )
 
         app_version_str = self._dcc_app.get_application_version()
-        app_version = float(".".join(app_version_str.split(".")[:2]))
+        try:
+            app_version = float(".".join(app_version_str.split(".")[:2]))
+        except ValueError:
+            raise sgtk.TankError(
+                "Could not determine the running Toon Boom Harmony version "
+                "from the string returned by the application: '%s'" % app_version_str
+            )
 
         if app_version < MIN_DCC_VERSION:
             msg = (

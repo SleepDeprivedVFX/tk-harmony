@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project source="Harmony Premium (HarmonyPremium.exe) version 15.0.5 build 13929 2018-08-13 08:19:50" version="1505" build="13929" creator="harmony">
+<project  source="Harmony Premium (HarmonyPremium.exe) version 25.2.0 build 24991 2026-03-25 08:42:03" version="2520" build="24991" date="Sat Jul 18 13:11:06 2026" timeMsec="1784405466820" username="sleep" realUsername="sleep" creator="harmony">
  <elements>
   <element id="3" elementName="Shotgun_Banner" elementFolder="Shotgun_Banner" pixmapFormat="11" scanType="2" fieldChart="12" vectorType="0" rootFolder="elements">
    <drawings>
@@ -16,12 +16,16 @@
   <pixelPerModelUnitForVectorLayers val="0.28800000000000009"/>
   <pixelPerModelUnitForBitmapLayers val="0.28800000000000009"/>
   <canvasForBitmapLayers size="3840,2160"/>
+  <imageProcessingFormat val="rgba16"/>
   <cameraInSymbols val="true"/>
   <scaleFactor val="1"/>
+  <textureColorSpace val="sRGB"/>
+  <convertPalettesColorSpace val="false"/>
+  <tvgRecoveryTexture val="true"/>
  </options>
  <timelineMarkers/>
  <scenes>
-  <scene name="Top" id="09a3701060100c0b" nbframes="60">
+  <scene name="Top" id="09a3701060100c0b" nbframes="60" startFrame="1" stopFrame="60">
    <columns>
     <column type="0" name="ATV-09A4CCFAE610150D" displayOrder="1" width="100" anonymous="true" id="3">
      <elementSeq exposures="1-60" val="1" id="3"/>
@@ -35,7 +39,7 @@
      <collapsed val="false"/>
     </options>
     <nodeslist>
-     <module type="SCRIPT_MODULE" name="Shotgun_Engine" pos="-628,-340,3" publishUnderTab="ScriptModule">
+     <module type="SCRIPT_MODULE" name="Shotgun_Engine" pos="-628,-340,2" publishUnderTab="ScriptModule">
       <options>
        <color val="#0000FFFF"/>
        <collapsed val="false"/>
@@ -57,7 +61,7 @@
         </val>
        </specsEditor>
        <scriptEditor>
-        <filename/>
+        <filename val=""/>
         <editor>
          <val>
           <![CDATA[MessageLog.trace("Shotgun Startup Project Loaded");
@@ -72,33 +76,41 @@ if (__sgtk_bootstrap_js__) {
         </editor>
        </scriptEditor>
        <initScript>
-        <filename/>
-        <editor val="// Following code will be called during creation of
+        <filename val=""/>
+        <editor>
+         <val>
+          <![CDATA[// Following code will be called during creation of
 // Script Module.
-"/>
+]]>
+         </val>
+        </editor>
        </initScript>
        <cleanupScript>
-        <filename/>
-        <editor val="// Following code will be called during destruction of
+        <filename val=""/>
+        <editor>
+         <val>
+          <![CDATA[// Following code will be called during destruction of
 // Script Module.
-// ..."/>
+// ...]]>
+         </val>
+        </editor>
        </cleanupScript>
        <uiScript>
-        <filename/>
-        <editor/>
+        <filename val=""/>
+        <editor val=""/>
        </uiScript>
-       <uiData/>
-       <files/>
+       <uiData val=""/>
+       <files val=""/>
       </attrs>
      </module>
-     <module type="DISPLAY" name="Display" pos="-621,-100,4" publishUnderTab="Display">
+     <module type="DISPLAY" name="Display" pos="-621,-100,3" publishUnderTab="Display">
       <options>
        <collapsed val="false"/>
        <nodeShowThumbnail val="true"/>
        <version val="1"/>
       </options>
      </module>
-     <module type="READ" name="Shotgun_Banner" pos="-636,-220,1" publishUnderTab="Shotgun_Banner">
+     <module type="READ" name="Shotgun_Banner" pos="-680,-220,1" publishUnderTab="Shotgun_Banner">
       <options>
        <locked val="true"/>
        <collapsed val="false"/>
@@ -161,10 +173,10 @@ if (__sgtk_bootstrap_js__) {
        <drawing>
         <elementMode val="true"/>
         <element col="ATV-09A4CCFAE610150D">
-         <layer/>
+         <layer val=""/>
         </element>
         <customName>
-         <name/>
+         <name val=""/>
          <extension val="tga"/>
          <fieldChart val="12" defaultValue="12"/>
         </customName>
@@ -184,6 +196,7 @@ if (__sgtk_bootstrap_js__) {
        <readColor val="true"/>
        <readTransparency val="true"/>
        <colorTransformation val="Linear"/>
+       <colorSpace val="sRGB"/>
        <applyMatteToColor val="W"/>
        <enableLineTexture val="true"/>
        <antialiasingQuality val="HIGH"/>
@@ -207,6 +220,10 @@ if (__sgtk_bootstrap_js__) {
        <alignmentRule val="ASIS"/>
        <morphingVelo val="0" defaultValue="0"/>
        <canAnimate val="false"/>
+       <tileHorizontal val="false"/>
+       <tileVertical val="false"/>
+       <framerate val="-1" defaultValue="-1"/>
+       <useFileUnits val="false"/>
       </attrs>
      </module>
     </nodeslist>
@@ -222,7 +239,14 @@ if (__sgtk_bootstrap_js__) {
     <meta type="string" name="Shotgun Toolkit Engine" creator="Harmony Premium" version="1.0">
      <string value="Startup template"/>
     </meta>
+    <meta type="symmetryGuideList" name="symmetryGuideList" creator="Harmony Premium" version="1.0">
+     <symmetryGuideList selectedGuide="-1"/>
+    </meta>
+    <meta type="alignmentGuideList" name="alignmentGuideList" creator="Harmony Premium" version="1.0">
+     <alignmentGuideList selectedGuide="-1"/>
+    </meta>
    </metas>
+   <timelineOrderer/>
   </scene>
  </scenes>
  <symbols>
@@ -233,4 +257,9 @@ if (__sgtk_bootstrap_js__) {
  <timeline>
   <scene id="09a3701060100c0b"/>
  </timeline>
+ <metas>
+  <meta type="checksumValidation" name="checksumValidation" creator="Harmony Premium" version="1.0">
+   <value data="70000000000000000303B554AD8049490326E9E3493FFC7F7C3162A4789923245B6AFD43EF4AB788890CDFA3D6B108E751CA68C0A228B175EF9D3859EE5E44D81207A891101C904ECDFC3187D446BED431A326C0D4D9390DDF59D77E3B8E805FBA765FE36893C87CE1667441578D8A1A51733B234339D62C5B0200002D2D2D2D2D424547494E2043455254494649434154452D2D2D2D2D0A4D4949426B5443422B3641444167454341674945306A414E42676B71686B694739773042415155464144412B4D517377435159445651514745774A44515445500A4D4130474131554543424D475558566C596D566A4D52347748415944565151444578567361574E6C626E4E6C6369353062323975596D39766253356A623230770A4868634E4D6A59774E4445794D4441774F4449325768634E4D7A59774E4445774D4441774F444932576A416A4D517377435159445651514745774A44515445550A4D424947413155454177774C56305643587A49794E7A45314D7A41775844414E42676B71686B6947397730424151454641414E4C41444249416B454139484E6D0A3278523665703342375468682F4D4B2B424B6B73586236626A48496941456E7A6C56467A507A6D314F6D37544D7A2B62597635494139767566366E4457676C6E0A46616A6A5A2B3247656F62466E2F4A736E514944415141424D41304743537147534962334451454242515541413447424148383076536B5172756655666A35700A3963723977654A5977456C537044427751514C4738436D6C4E33423230644A51315462335764686E5A765074724B4C30716B7343795877614D783141376B7A520A44314D576163717A68373063527032533679615164322F73646C722B6F3447375653734D57494F4E6C3147777165314C4F4A52325054303759324C43484D784D0A745544463731626F564F59664274653146495A44654E644B726253550A2D2D2D2D2D454E442043455254494649434154452D2D2D2D2D0A40000000D521D2BEB05228EE307F674543333490F7E8474BA787458C95A4687335984CEB2DD367A01268A2F4D5CACED708E4A20AC2433E1C66BCCFEA9261E0787A13BB93"/>
+  </meta>
+ </metas>
 </project>

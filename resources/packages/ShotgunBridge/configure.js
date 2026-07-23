@@ -56,23 +56,37 @@ var META_SHOTGUN_PATH = "meta.shotgun.path";
 
 function singleShotTimer(msec, callback)
 {
-    // FIX: QTimer() requires parentheses; changeInterval() was renamed to
-    // setInterval() in Qt 5 / Harmony 17+.  We call both names so the code
-    // degrades gracefully if one is absent.
-    var t = new QTimer();
-    if (typeof t.setInterval === "function") {
-        t.setInterval(msec);
-    } else {
-        // Harmony 16 fallback
-        t.changeInterval(msec);
-    }
-    t.singleShot = true;
-
-    t.timeout.connect(function() {
-        t.stop();
+    // Two prior attempts confirmed broken live on Harmony 25.2:
+    //   1. t.setInterval()/t.changeInterval() instance methods — neither
+    //      resolved to a function.
+    //   2. The static QTimer.singleShot(msec, callback) convenience
+    //      method — also undefined in this JS engine.
+    // Both silently aborted every caller of singleShotTimer() (RENDER_SCENE
+    // among them) before the deferred callback ever ran. This attempt sets
+    // "interval" as a plain JS property instead of via a setter method —
+    // QObject properties are commonly exposed this way in Harmony's
+    // bindings, and t.singleShot = true below already relied on exactly
+    // that pattern without ever erroring in any of the earlier attempts.
+    // If even this throws, fall back to calling the callback synchronously
+    // rather than leaving the caller permanently hung a third time — losing
+    // the "let the socket finish processing first" deferral is a much
+    // smaller problem than that.
+    try {
+        var t = new QTimer();
+        t.interval = msec;
+        t.singleShot = true;
+        t.timeout.connect(function() {
+            t.stop();
+            callback();
+        });
+        t.start();
+    } catch(e) {
+        MessageLog.trace(
+            "DIAGNOSTIC singleShotTimer: QTimer setup failed (" + e
+            + "), falling back to a synchronous call."
+        );
         callback();
-    });
-    t.start();
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -967,10 +981,13 @@ function Engine()
 
     self.get_version = function(data)
     {
-        // FIX: about.getVersionInfoStr() had a spurious trailing space before
-        //      the parentheses — cleaned up. Also added a fallback if the
-        //      regex fails to match.
-        var regex = /.* (\d+\.\d+\.\d+) .*/;
+        // FIX: the previous regex required a space on BOTH sides of the
+        //      version number (/.* (\d+\.\d+\.\d+) .*/), which fails to
+        //      match whenever the version happens to be at the very end of
+        //      the string (no trailing space) — a real risk since this
+        //      format is not documented and varies across Harmony builds.
+        //      Search for the version pattern anywhere in the string instead.
+        var regex = /(\d+\.\d+\.\d+)/;
         var version_info = about.getVersionInfoStr();
         var version_re = regex.exec(version_info);
 
@@ -1208,6 +1225,37 @@ function Engine()
         return read_node;
     };
 
+    self.import_template = function(data)
+    {
+        // NOT LIVE-VERIFIED — needs Sarah to confirm against Harmony 25.2
+        // in the Script Editor before this is trusted.
+        //
+        // copyPaste.pasteTemplateIntoScene(srcPath, dstNode, startFrame,
+        // pasteOptions) is the function documented in Toon Boom's
+        // scripting reference for importing a .tpl the same way dragging
+        // it out of the Library panel does. Argument order/names and
+        // exact behaviour (what "dstNode" should be, whether pasteOptions
+        // can be null) are unconfirmed for this Harmony version — test
+        // with a real .tpl and adjust as needed. The path this receives
+        // is the .tpl FOLDER's path (see harmony_asset_template_publish /
+        // harmony_shot_template_publish in templates.yml).
+        var path = data.path;
+
+        scene.beginUndoRedoAccum("Import Template");
+        try
+        {
+            copyPaste.pasteTemplateIntoScene(path, node.root(), 1, null);
+        }
+        catch(e)
+        {
+            scene.cancelUndoRedoAccum();
+            self.log_exception("IMPORT_TEMPLATE failed: " + e);
+            return false;
+        }
+        scene.endUndoRedoAccum();
+        return true;
+    };
+
     self.get_node_metadata = function(data)
     {
         // FIX: renamed local `node` variable to `node_name` to avoid
@@ -1276,7 +1324,6 @@ function Engine()
         }
         return node_name;
     };
-    self.registerCallback("RELINK_READ_NODE", self.relink_read_node);
 
     self.relink_sound_column = function(data)
     {
@@ -1298,7 +1345,6 @@ function Engine()
         }
         return col_name;
     };
-    self.registerCallback("RELINK_SOUND_COLUMN", self.relink_sound_column);
 
     self.set_node_metadata = function(data)
     {
@@ -1313,52 +1359,83 @@ function Engine()
         }
         return true;
     };
-    self.registerCallback("SET_NODE_METADATA", self.set_node_metadata);
+
+    self.configure_write_node = function(data)
+    {
+        // Confirmed live against Harmony 25.2 via node.getAttrList() dump:
+        // DRAWING_NAME is a single attribute holding the full folder +
+        // filename-prefix (e.g. ".../v003/$Scene."); Harmony appends
+        // {frame, zero-padded to LEADING_ZEROS}.{extension for DRAWING_TYPE}
+        // after it. There are no separate "Image Folder"/"Image Filename"
+        // attributes. LEADING_ZEROS must be forced explicitly — the scene
+        // default (3) does not match Toolkit's SEQ key padding (4), and
+        // publish_render.py's FFmpeg/PublishedFile registration both
+        // hardcode 4-digit frame numbers.
+        var output_dir    = data.output_dir;
+        var base_name     = data.base_name;
+        var file_format   = data.file_format || "PNG";
+        var leading_zeros = data.leading_zeros || 4;
+
+        var write_nodes = node.getNodes(["WRITE"]);
+        if (!write_nodes || write_nodes.length === 0)
+        {
+            self.log_exception("CONFIGURE_WRITE_NODE: no WRITE node found in the scene.");
+            return false;
+        }
+
+        var write_node = write_nodes[0];
+        if (write_nodes.length > 1)
+        {
+            self.log_warning(
+                "CONFIGURE_WRITE_NODE: multiple WRITE nodes found, configuring "
+                + "only the first: " + write_node
+            );
+        }
+
+        scene.beginUndoRedoAccum("Configure Write Node");
+        try
+        {
+            node.setTextAttr(write_node, "DRAWING_TYPE", 1, file_format);
+            node.setTextAttr(write_node, "DRAWING_NAME", 1, output_dir + "/" + base_name + ".");
+            node.setTextAttr(write_node, "LEADING_ZEROS", 1, String(leading_zeros));
+        }
+        catch(e)
+        {
+            scene.cancelUndoRedoAccum();
+            self.log_exception("CONFIGURE_WRITE_NODE failed: " + e);
+            return false;
+        }
+        scene.endUndoRedoAccum();
+
+        return write_node;
+    };
 
     self.render_scene = function(data) {
-        var output_dir   = data.output_dir;    // base directory for image sequence
-        var base_name    = data.base_name;     // filename base, e.g. "SH010.v001"
         var start_frame  = data.start_frame;
         var stop_frame   = data.stop_frame;
-        var file_format  = data.file_format || "PNG4";
         var status_path  = data.status_path;  // path Python will poll for completion
+        var expected_frame_count = stop_frame - start_frame + 1;
+        var status_written = false;  // guard against writing the status file twice
 
-        // Defer the render so the socket can process the incoming message first
-        singleShotTimer(0, function() {
-            var success = false;
-            var error_msg = "";
-            var rendered_frames = 0;
+        // DIAGNOSTIC (temporary — remove once the render pipeline is
+        // confirmed working live): WARNING level so it's guaranteed to hit
+        // the log regardless of debug settings, same approach that found
+        // the readyRead/deadlock bugs in Session 2.
+        self.log_warning("DIAGNOSTIC RENDER_SCENE received: start=" + start_frame
+            + " stop=" + stop_frame + " status_path=" + status_path);
 
-            try {
-                // Set render output path and format
-                // output_path is the base: Harmony appends frame numbers automatically
-                var output_path = output_dir + "/" + base_name;
-
-                render.setRenderMode(render.DRAFT);
-
-                // renderSceneAllWithCallback available in Harmony 17+
-                // falls back to renderSceneAll for older versions
-                if (typeof render.renderSceneAllWithCallback === "function") {
-                    render.renderSceneAllWithCallback(function(frameResult) {
-                        rendered_frames += 1;
-                    });
-                } else {
-                    render.renderSceneAll();
-                    rendered_frames = stop_frame - start_frame + 1;
-                }
-
-                success = true;
-            } catch(e) {
-                error_msg = e.toString();
-                self.log_exception("RENDER_SCENE failed: " + e);
+        function write_status(success, rendered_frames, error_msg) {
+            if (status_written) {
+                return;
             }
+            status_written = true;
 
-            // Write status file so Python knows we are done
+            self.log_warning("DIAGNOSTIC RENDER_SCENE writing status file: success=" + success
+                + " rendered_frames=" + rendered_frames + " error=" + error_msg);
+
             var status = {
                 "success": success,
                 "rendered_frames": rendered_frames,
-                "output_dir": output_dir,
-                "base_name": base_name,
                 "error": error_msg
             };
 
@@ -1368,17 +1445,95 @@ function Engine()
                     var stream = new QTextStream(qfile);
                     stream.writeString(JSON.stringify(status));
                     qfile.close();
+                    self.log_warning("DIAGNOSTIC RENDER_SCENE status file written OK.");
                 } else {
                     self.log_exception("RENDER_SCENE: could not open status file for writing: " + status_path);
                 }
             } catch(write_err) {
                 self.log_exception("RENDER_SCENE: could not write status file: " + write_err);
             }
+        }
+
+        // Defer the render so the socket can process the incoming message first
+        singleShotTimer(0, function() {
+            self.log_warning("DIAGNOSTIC RENDER_SCENE deferred callback fired.");
+
+            try {
+                // Previously start_frame/stop_frame were only used to
+                // estimate rendered_frames below — never actually applied
+                // to the scene, so renderSceneAll()/renderSceneAllWithCallback()
+                // always rendered whatever the scene's own Start/Stop frame
+                // settings happened to be, regardless of what Toolkit asked
+                // for. Now explicitly set, same call SET_START_FRAME/
+                // SET_STOP_FRAME already use.
+                scene.beginUndoRedoAccum("Render Scene - Set Frame Range");
+                scene.setStartFrame(start_frame);
+                scene.setStopFrame(stop_frame);
+                scene.endUndoRedoAccum();
+
+                self.log_warning("DIAGNOSTIC RENDER_SCENE frame range set, scene now reports: "
+                    + scene.getStartFrame() + "-" + scene.getStopFrame());
+
+                // Confirmed broken live on Harmony 25.2: render.setRenderMode
+                // is not a function in this JS engine at all (unlike the
+                // singleShotTimer case, there's no evidence for a property-
+                // style alternative, and this is a quality/speed knob, not
+                // something the render actually depends on) — skip
+                // gracefully rather than guess another name blind.
+                if (typeof render.setRenderMode === "function" && typeof render.DRAFT !== "undefined") {
+                    render.setRenderMode(render.DRAFT);
+                } else {
+                    self.log_warning("DIAGNOSTIC render.setRenderMode/DRAFT not available in this Harmony version — skipping, rendering at default quality.");
+                }
+
+                var render_start_ms = Date.now();
+                var rendered_frames = 0;
+
+                // renderSceneAllWithCallback available in Harmony 17+,
+                // falls back to renderSceneAll for older versions.
+                //
+                // CONFIRMED LIVE (Harmony 25.2): renderSceneAllWithCallback
+                // is ASYNCHRONOUS — the outer call below returns almost
+                // immediately (~10-15s observed for a 96-frame render that
+                // takes 2-3 min manually), while the per-frame callback
+                // keeps firing afterward as frames actually finish in the
+                // background. Treating the outer call's return as "done"
+                // (the previous behavior) reported success and let
+                // publish_render.py start collecting frames long before
+                // the render was actually finished, mixing in stale
+                // leftover frames from earlier test attempts at the same
+                // path and producing a jumbled/out-of-order frame
+                // sequence. Completion is now determined ONLY by the
+                // callback reaching expected_frame_count.
+                if (typeof render.renderSceneAllWithCallback === "function") {
+                    self.log_warning("DIAGNOSTIC calling render.renderSceneAllWithCallback() (async — waiting for callback to reach "
+                        + expected_frame_count + " frame(s))...");
+                    render.renderSceneAllWithCallback(function(frameResult) {
+                        rendered_frames += 1;
+                        if (rendered_frames >= expected_frame_count) {
+                            self.log_warning("DIAGNOSTIC render callback reports all " + rendered_frames
+                                + " frame(s) complete after " + (Date.now() - render_start_ms) + " ms.");
+                            write_status(true, rendered_frames, "");
+                        }
+                    });
+                } else {
+                    // No per-frame callback available on this Harmony
+                    // version to confirm real completion — this path is
+                    // still assumed synchronous, as before.
+                    self.log_warning("DIAGNOSTIC renderSceneAllWithCallback not available, calling render.renderSceneAll()...");
+                    render.renderSceneAll();
+                    rendered_frames = expected_frame_count;
+                    self.log_warning("DIAGNOSTIC render.renderSceneAll() returned after " + (Date.now() - render_start_ms) + " ms.");
+                    write_status(true, rendered_frames, "");
+                }
+            } catch(e) {
+                self.log_exception("RENDER_SCENE failed: " + e);
+                write_status(false, 0, e.toString());
+            }
         });
 
         return true;  // Immediate acknowledgement — render happens asynchronously
     };
-    self.registerCallback("RENDER_SCENE", self.render_scene);
 
     // ----
     self.ping = function(data)
@@ -1470,6 +1625,7 @@ function Engine()
         self.registerCallback("IMPORT_DRAWING",   self.import_drawing);
         self.registerCallback("IMPORT_AUDIO",     self.import_audio);
         self.registerCallback("IMPORT_CLIP",      self.import_clip);
+        self.registerCallback("IMPORT_TEMPLATE",  self.import_template);
 
         // Metadata
         self.registerCallback("GET_NODE_METADATA",  self.get_node_metadata);
@@ -1486,6 +1642,7 @@ function Engine()
         self.registerCallback("SET_NODE_METADATA",   self.set_node_metadata);
 
         // Render
+        self.registerCallback("CONFIGURE_WRITE_NODE", self.configure_write_node);
         self.registerCallback("RENDER_SCENE", self.render_scene);
 
         self.registerCallback("PING",  self.ping);

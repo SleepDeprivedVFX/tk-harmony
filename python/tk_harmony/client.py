@@ -6,6 +6,7 @@ Module responsible for the communication through sockets
 import sys
 import os
 import time
+import traceback
 
 import sgtk
 
@@ -58,6 +59,27 @@ class QTcpSocketClient(QtCore.QObject):
         self.connection.connected.connect(self._on_connected)
         self._buffer = None
         self._receiving = False
+
+        # FIX: readyRead is used to catch unprompted incoming messages (e.g.
+        # SHOW_MENU), but the connection is also driven synchronously via
+        # waitForReadyRead()/_receive() for request/response calls like
+        # send_and_receive_command(). Mixing those two styles on the same
+        # QTcpSocket can leave the readyRead signal silently not firing for
+        # later data even though the socket itself is still healthy — this
+        # poll timer is a defensive fallback that processes any buffered
+        # data directly, independent of whether the signal cooperates.
+        self._poll_timer = QtCore.QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_connection)
+        self._poll_timer.start(100)
+
+    def _poll_connection(self):
+        if (
+            self.connection
+            and not self._receiving
+            and self.is_connected()
+            and self.connection.bytesAvailable() > 0
+        ):
+            self._receive()
 
     def host(self):
         return self._host
@@ -181,7 +203,14 @@ class QTcpSocketClient(QtCore.QObject):
 
             if self._block_size > 0 and self.connection.bytesAvailable() >= self._block_size:
                 data = stream.readRawData(self._block_size)
-                request = QtCore.QTextCodec.codecForMib(106).toUnicode(data)
+                # FIX: QTextCodec.codecForMib() was removed from QtCore in Qt6
+                # (moved to the optional QtCore5Compat module, not guaranteed to
+                # be available). Decode the UTF-8 bytes directly instead —
+                # readRawData() already returns a Python bytes/bytearray object.
+                if isinstance(data, (bytes, bytearray)):
+                    request = data.decode("utf-8")
+                else:
+                    request = bytes(data).decode("utf-8")
                 # logger.debug("About to process request %s in queue: %s" % (i, request))
                 self._process_request(request)
                 self._block_size = 0
@@ -233,7 +262,15 @@ class QTcpSocketClient(QtCore.QObject):
 
             # check if any callbacks are registered for this request
             if method in self._callbacks:
-                result = self._callbacks[method](**kwargs)
+                try:
+                    result = self._callbacks[method](**kwargs)
+                except Exception:
+                    logger.error(
+                        "Exception raised while handling command '%s': %s"
+                        % (method, traceback.format_exc())
+                    )
+                    self._on_callback_error(method, kwargs)
+                    return None
 
                 if result and command.get("request_return"):
                     self.send_reply(request_id, result)
@@ -310,6 +347,15 @@ class QTcpSocketClient(QtCore.QObject):
 
     def register_callback(self, method, callback):
         self._callbacks[method] = callback
+
+    def _on_callback_error(self, method, kwargs):
+        """
+        Called when a registered callback raises while handling an incoming
+        command. Base implementation is a no-op (the exception is already
+        logged by _process_request); subclasses with a UI-facing engine can
+        override this to surface the error to the user.
+        """
+        pass
 
 
 class Client(QtGui.QDialog):

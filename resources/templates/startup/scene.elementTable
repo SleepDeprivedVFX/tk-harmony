@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<elements source="Harmony Premium (HarmonyPremium.exe) version 15.0.5 build 13929 2018-08-13 08:19:50" version="1505" build="13929">
+<elements  source="Harmony Premium (HarmonyPremium.exe) version 25.2.0 build 24991 2026-03-25 08:42:03" version="2520" build="24991" date="Sat Jul 18 13:11:06 2026" timeMsec="1784405466816" username="sleep" realUsername="sleep">
  <element id="3" elementName="Shotgun_Banner" elementFolder="Shotgun_Banner" pixmapFormat="11" scanType="2" fieldChart="12" vectorType="0" rootFolder="elements"/>
 </elements>

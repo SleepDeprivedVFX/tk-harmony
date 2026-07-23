@@ -6,6 +6,7 @@ Module that encapsulates access to the actual application
 
 import os
 import glob
+import shutil
 import traceback
 from itertools import chain
 
@@ -27,6 +28,12 @@ class Application(QTcpSocketClient):
         while not self.is_connected():
             self.connect_to_host()
             self.engine.logger.debug("Waiting for server: %s" % self.connection_status())
+
+    def _on_callback_error(self, method, kwargs):
+        self.engine.show_error(
+            "Shotgun Harmony Engine encountered an error handling '%s'.\n"
+            "See the log file for the full traceback." % method
+        )
 
     def broadcast_event(self, event_name):
         self.send_command(event_name)
@@ -248,6 +255,15 @@ class Application(QTcpSocketClient):
         # the fancy callbacks that other python versions allow to choose your
         # own copy function, which could have become handy to inject the
         # renaming functionality.
+        # If the copy fails partway through (a locked file, a Dropbox/OneDrive
+        # placeholder that isn't fully hydrated, a path length issue, etc.),
+        # target_folder is left containing an incomplete set of files —
+        # looks like a real version but won't open in Harmony, and silently
+        # blocks the next attempt at this version number. Only clean it up
+        # on failure if we're the ones who created it (never touch a
+        # folder that already existed before this call).
+        target_folder_existed_before = os.path.exists(target_folder)
+
         try:
             target_parent_folder = os.path.dirname(target_folder)
             if not os.path.exists(target_parent_folder):
@@ -261,6 +277,13 @@ class Application(QTcpSocketClient):
             )
 
         except Exception as e:
+            if not target_folder_existed_before and os.path.exists(target_folder):
+                self.engine.logger.debug(
+                    "Copy failed partway — removing incomplete target folder '%s'."
+                    % target_folder
+                )
+                shutil.rmtree(target_folder, ignore_errors=True)
+
             raise Exception(
                 "Failed to copy source folder from '%s' to '%s'.\n%s"
                 % (source_folder, target_folder, traceback.format_exc())
@@ -292,6 +315,24 @@ class Application(QTcpSocketClient):
 
     def get_frame_range(self):
         result = self.send_and_receive_command("GET_FRAME_RANGE")
+        if result is None:
+            # send_and_receive_command returns None on a socket timeout
+            # (MAX_READ_RESPONSE_TIME, 10s in client.py) rather than
+            # raising — callers that assume a dict (e.g. publish_render.py's
+            # _render() calling frame_range.get(...)) crash with an
+            # unrelated-looking AttributeError instead of a clear timeout
+            # error. Most likely to happen right after a scene reload
+            # (e.g. a version-up/save_project_as just before this call,
+            # such as when the Harmony Session and Render publish items
+            # run together) — reopening a real scene can easily take
+            # longer than 10s, so the very next RPC call can time out
+            # before Harmony has finished settling.
+            raise Exception(
+                "Timed out waiting for Harmony to respond to GET_FRAME_RANGE. "
+                "This is most likely to happen immediately after a scene "
+                "reload (e.g. a version-up just completed) — Harmony may "
+                "still be settling. Try the operation again."
+            )
         return result
 
     def set_frame_range(self, start_frame, stop_frame):
@@ -327,6 +368,14 @@ class Application(QTcpSocketClient):
         if action == "movie":
             result = self.send_command("IMPORT_CLIP", path=path)
 
+        if action == "template":
+            # NOTE: unlike the other actions, this uses send_and_receive
+            # (not fire-and-forget) so the Loader can actually detect and
+            # report an import failure instead of silently no-op'ing — the
+            # other actions above still have this gap and should get the
+            # same treatment later.
+            result = self.send_and_receive_command("IMPORT_TEMPLATE", path=path)
+
         return result
 
     def get_nodes_of_type(self, node_types):
@@ -359,13 +408,41 @@ class Application(QTcpSocketClient):
     def relink_sound_column(self, column_name, path):
         return self.send_and_receive_command("RELINK_SOUND_COLUMN", column_name=column_name, path=path)
 
-    def render_scene(self, output_dir, base_name, start_frame, stop_frame, status_path, file_format="PNG4"):
-        self.send_command(
-            "RENDER_SCENE",
+    def configure_write_node(self, output_dir, base_name, file_format="PNG", leading_zeros=4):
+        """
+        Points the scene's Write node(s) at a Toolkit-computed output
+        location/format, so a subsequent render_scene() call actually lands
+        where the render publish plugin expects it. This must be called
+        BEFORE render_scene() — render_scene() no longer takes a path at
+        all; the Write node itself now owns that.
+
+        leading_zeros must match the {SEQ} template key's frame padding —
+        publish_render.py hardcodes 4-digit frame numbers in its FFmpeg
+        command and PublishedFile sequence registration.
+
+        Uses send_and_receive (not fire-and-forget) so a failure to find or
+        configure a Write node is surfaced immediately rather than only
+        discovered later when no rendered frames turn up.
+        """
+        output_dir = output_dir.replace("\\", "/")
+        return self.send_and_receive_command(
+            "CONFIGURE_WRITE_NODE",
             output_dir=output_dir,
             base_name=base_name,
+            file_format=file_format,
+            leading_zeros=leading_zeros,
+        )
+
+    def render_scene(self, start_frame, stop_frame, status_path):
+        # NOTE: output path/format are no longer passed here — call
+        # configure_write_node() first. Previously this method accepted
+        # output_dir/base_name/file_format, but configure.js's render_scene()
+        # never actually applied them to the render (dead code) — the Write
+        # node's own output setting is what actually determined where frames
+        # landed, regardless of what was passed here.
+        self.send_command(
+            "RENDER_SCENE",
             start_frame=start_frame,
             stop_frame=stop_frame,
             status_path=status_path,
-            file_format=file_format,
         )

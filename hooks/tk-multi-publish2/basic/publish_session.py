@@ -15,7 +15,6 @@ import fnmatch
 import traceback
 
 import sgtk
-from sgtk.util.filesystem import ensure_folder_exists
 
 
 __author__ = "Diego Garcia Huerta"
@@ -444,14 +443,14 @@ def _save_session(path=None):
     if path is None:
         engine.app.save_project()
     else:
-        # Ensure that the folder is created when saving
-        folder = os.path.dirname(path)
-        ensure_folder_exists(folder)
-
-        # we are saving a new version, so we only need the name of the file
-        _, filename = os.path.split(path)
-        filename_file, _ = os.path.splitext(filename)
-        engine.app.save_new_version(filename_file)
+        # FIX: previously called engine.app.save_new_version(), Harmony's
+        # native scene.saveAsNewVersion() which only takes a bare name (not
+        # a path) and versions within Harmony's own internal
+        # environment/job/scene database — it does not honor the target
+        # path. Copy the whole project folder to the new location and open
+        # it there instead, same fix as the workfiles2 scene_operation hook.
+        source_file = engine.app.get_current_project_path()
+        engine.app.save_project_as(path, source_file=source_file, open_project=True)
 
 
 # TODO: method duplicated in all the Harmony hooks

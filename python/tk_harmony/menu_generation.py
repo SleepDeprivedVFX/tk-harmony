@@ -58,7 +58,16 @@ class MenuGenerator(object):
 
         qApp.processEvents()
 
-        self.menu_handle.exec_(pos)
+        # FIX: exec_() blocks in a nested modal event loop until the menu is
+        # dismissed. This engine runs as a separate, detached background
+        # process from Harmony; Windows will not grant a background process
+        # foreground focus, so the menu can never receive the click needed
+        # to dismiss it. exec_() then never returns, freezing this
+        # single-threaded process (including its socket read loop) forever
+        # on the very first click. popup() shows the menu without blocking,
+        # relying on the already-running QApplication event loop (started in
+        # HarmonyEngine.post_app_init) instead of a second nested one.
+        self.menu_handle.popup(pos)
 
     def create_menu(self, disabled=False):
         """

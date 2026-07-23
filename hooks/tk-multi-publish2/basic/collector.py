@@ -21,6 +21,7 @@ HookBaseClass = sgtk.get_hook_baseclass()
 
 
 SESSION_PUBLISHED_TYPE = "Toon Boom Harmony Project File"
+TEMPLATE_PUBLISHED_TYPE = "Harmony Template"
 
 
 class HarmonySessionCollector(HookBaseClass):
@@ -62,7 +63,17 @@ class HarmonySessionCollector(HookBaseClass):
                 "templates.yml. If configured, is made available"
                 "to publish plugins via the collected item's "
                 "properties. ",
-            }
+            },
+            "Template Work Area": {
+                "type": "template",
+                "default": None,
+                "description": "Template pointing at the Harmony work area "
+                "folder (e.g. asset_work_area_harmony). Its "
+                "'templates' subfolder is scanned for .tpl "
+                "folders — created via Harmony's own Library "
+                "panel drag-and-drop — that are available to "
+                "publish as Harmony Templates.",
+            },
         }
 
         # update the base settings with these settings
@@ -82,6 +93,10 @@ class HarmonySessionCollector(HookBaseClass):
 
         # create an item representing the current Toon Boom Harmony session
         item = self.collect_current_harmony_session(settings, parent_item)
+
+        # create an item for every publishable .tpl template found in the
+        # work area's templates/ folder
+        self.collect_harmony_templates(settings, parent_item)
 
     def get_export_path(self, settings):
         publisher = self.parent
@@ -166,3 +181,62 @@ class HarmonySessionCollector(HookBaseClass):
         self.logger.info("Collected current Toon Boom Harmony session")
 
         return session_item
+
+    def collect_harmony_templates(self, settings, parent_item):
+        """
+        Creates one item per .tpl folder found in the current work area's
+        'templates' subfolder. Artists create the .tpl itself via Harmony's
+        own Library panel (drag nodes into the Library, then drag/save it
+        out into this folder) — this method only discovers what's already
+        there and offers it up to publish. Unlike the session item, a .tpl
+        is a directory (data + PALETTES/ + a thumbnail) that IS the
+        published item, not a leaf file inside a wrapper folder.
+
+        :param parent_item: Parent Item instance
+        :returns: list of items of type harmony.template
+        """
+        publisher = self.parent
+        engine = sgtk.platform.current_engine()
+
+        template_work_area_setting = settings.get("Template Work Area")
+        if not template_work_area_setting or not template_work_area_setting.value:
+            self.logger.debug(
+                "No 'Template Work Area' configured — skipping Harmony "
+                "template collection."
+            )
+            return []
+
+        work_area_template = publisher.engine.get_template_by_name(
+            template_work_area_setting.value
+        )
+        if not work_area_template:
+            return []
+
+        fields = engine.context.as_template_fields(work_area_template)
+        work_area = work_area_template.apply_fields(fields)
+
+        templates_folder = os.path.join(work_area, "templates")
+        if not os.path.isdir(templates_folder):
+            return []
+
+        template_items = []
+        for entry in sorted(os.listdir(templates_folder)):
+            tpl_path = os.path.join(templates_folder, entry)
+            if os.path.isdir(tpl_path) and entry.lower().endswith(".tpl"):
+                display_name = os.path.splitext(entry)[0]
+
+                template_item = parent_item.create_item(
+                    "harmony.template", "Harmony Template", display_name
+                )
+                icon_path = os.path.join(
+                    self.disk_location, os.pardir, "icons", "geometry.png"
+                )
+                template_item.set_icon_from_path(icon_path)
+
+                template_item.properties["path"] = tpl_path
+                template_item.properties["publish_type"] = TEMPLATE_PUBLISHED_TYPE
+
+                template_items.append(template_item)
+                self.logger.info("Collected Harmony template: %s" % entry)
+
+        return template_items
