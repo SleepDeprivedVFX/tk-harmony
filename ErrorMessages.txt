@@ -1,0 +1,57 @@
+
+
+Exception raised while executing hook &#39;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\hooks\process_folder_creation.py&#39;
+Traceback (most recent call last):
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\pipelineconfig.py&quot;, line 1217, in execute_core_hook_internal
+return_value = hook.execute_hook(hook_path, parent, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\hook.py&quot;, line 577, in execute_hook
+return execute_hook_method([hook_path], parent, None, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\hook.py&quot;, line 631, in execute_hook_method
+ret_val = hook_method(**kwargs)
+^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\hooks\process_folder_creation.py&quot;, line 120, in execute
+os.makedirs(path, 0o777)
+File &quot;&lt;frozen os&gt;&quot;, line 215, in makedirs
+File &quot;&lt;frozen os&gt;&quot;, line 215, in makedirs
+File &quot;&lt;frozen os&gt;&quot;, line 225, in makedirs
+FileNotFoundError: [WinError 3] The system cannot find the path specified: &#39;F:\\&#39;
+A general error was reported.
+Traceback (most recent call last):
+File &quot;C:\Program Files\Shotgun\Resources\Desktop\Python\bundle_cache\app_store\tk-shotgun\v0.11.1\python\tk_shotgun\task.py&quot;, line 39, in run_command
+self._callback()
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\platform\engine.py&quot;, line 1076, in callback_wrapper
+return callback(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\bundle_cache\app_store\tk-multi-launchapp\v0.14.0\python\tk_multi_launchapp\base_launcher.py&quot;, line 156, in launch_version
+self._launch_callback(
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\bundle_cache\app_store\tk-multi-launchapp\v0.14.0\python\tk_multi_launchapp\base_launcher.py&quot;, line 457, in _launch_callback
+self._tk_app.sgtk.create_filesystem_structure(
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\api.py&quot;, line 914, in create_filesystem_structure
+folders = folder.process_filesystem_structure(
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\folder\operations.py&quot;, line 218, in process_filesystem_structure
+folders_created = io_receiver.execute_folder_creation()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\folder\folder_io.py&quot;, line 198, in execute_folder_creation
+self._tk.execute_core_hook(
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\api.py&quot;, line 122, in execute_core_hook
+return self.pipeline_configuration.execute_core_hook_internal(
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\pipelineconfig.py&quot;, line 1217, in execute_core_hook_internal
+return_value = hook.execute_hook(hook_path, parent, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\hook.py&quot;, line 577, in execute_hook
+return execute_hook_method([hook_path], parent, None, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\python\tank\hook.py&quot;, line 631, in execute_hook_method
+ret_val = hook_method(**kwargs)
+^^^^^^^^^^^^^^^^^^^^^
+File &quot;C:\Users\sleep\AppData\Roaming\Shotgun\samebrain\p91c70.basic.shotgun\cfg\install\core\hooks\process_folder_creation.py&quot;, line 120, in execute
+os.makedirs(path, 0o777)
+File &quot;&lt;frozen os&gt;&quot;, line 215, in makedirs
+File &quot;&lt;frozen os&gt;&quot;, line 215, in makedirs
+File &quot;&lt;frozen os&gt;&quot;, line 225, in makedirs
+FileNotFoundError: [WinError 3] The system cannot find the path specified: &#39;F:\\&#39;
+

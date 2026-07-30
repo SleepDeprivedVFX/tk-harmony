@@ -38,7 +38,7 @@ __contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 # when Harmony software version is above the tested one.
 SHOW_COMP_DLG = "SGTK_COMPATIBILITY_DIALOG_SHOWN"
 
-MIN_DCC_VERSION = 16.0
+MIN_DCC_VERSION = 25.0
 
 # logging functionality
 def display_error(msg):

@@ -231,6 +231,16 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             self.logger.error(error_msg)
             raise Exception(error_msg)
 
+        # Harmony's LEADING_ZEROS Write node attribute pads to a total width
+        # of (LEADING_ZEROS + 1), not LEADING_ZEROS itself — confirmed live
+        # by a rendered v005 sequence coming out 5 digits wide
+        # ("...v005.00001.png") when leading_zeros=4 was passed. Derive the
+        # value from the SEQ key's own format_spec instead of hardcoding it,
+        # so this stays correct if the template's padding width ever changes.
+        seq_format_spec = sequence_template.keys["SEQ"].format_spec
+        seq_width = int(seq_format_spec) if seq_format_spec else 4
+        leading_zeros = max(seq_width - 1, 0)
+
         # check output dir is writable (or its parent, if it doesn't exist yet)
         check_dir = output_dir if os.path.exists(output_dir) else os.path.dirname(output_dir)
         if os.path.exists(check_dir) and not os.access(check_dir, os.W_OK):
@@ -245,6 +255,7 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         item.properties["output_dir"] = output_dir
         item.properties["base_name"] = base_name
         item.properties["video_path"] = video_path
+        item.properties["leading_zeros"] = leading_zeros
 
         # --- confirm ffmpeg is available
         ffmpeg_path = self._resolve_ffmpeg_path(engine, settings)
@@ -287,6 +298,7 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         output_dir = item.properties["output_dir"]
         base_name = item.properties["base_name"]
         video_path = item.properties["video_path"]
+        leading_zeros = item.properties["leading_zeros"]
 
         # --- if this version has already been rendered, don't render again —
         # just publish what's there. Covers the "artist already rendered
@@ -299,7 +311,8 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             )
         else:
             self._render(
-                engine, output_dir, base_name, image_format, ffmpeg_path
+                engine, output_dir, base_name, image_format, ffmpeg_path,
+                leading_zeros,
             )
             existing_frames = self._find_rendered_frames(output_dir, base_name)
 
@@ -496,7 +509,8 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
                 except OSError as e:
                     self.logger.warning("Could not remove stale frame %s: %s" % (f, e))
 
-    def _render(self, engine, output_dir, base_name, image_format, ffmpeg_path):
+    def _render(self, engine, output_dir, base_name, image_format, ffmpeg_path,
+                leading_zeros):
         """
         Points the Write node at the Toolkit path (best-effort — see
         configure.js CONFIGURE_WRITE_NODE), triggers the render, and blocks
@@ -505,6 +519,7 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         frame_range = engine.app.get_frame_range()
         start_frame = int(frame_range.get("start_frame", 1))
         stop_frame = int(frame_range.get("stop_frame", 1))
+        expected_frame_count = stop_frame - start_frame + 1
 
         ensure_folder_exists(output_dir)
         self._clear_existing_frames(output_dir, base_name)
@@ -513,7 +528,8 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         engine.app.save_project()
 
         write_node = engine.app.configure_write_node(
-            output_dir=output_dir, base_name=base_name, file_format=image_format
+            output_dir=output_dir, base_name=base_name, file_format=image_format,
+            leading_zeros=leading_zeros,
         )
         if not write_node:
             raise Exception(
@@ -576,6 +592,43 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             raise Exception("Harmony render failed: %s" % error_msg)
 
         self.logger.info("Harmony render completed successfully.")
+
+        # Harmony's status file has been observed to report success before
+        # the rendered frames actually finish writing to disk — confirmed
+        # live: a render's frames all landed with mtimes several minutes
+        # AFTER the status file already said "done", causing the caller to
+        # find zero frames and fail outright. render.renderSceneAllWithCallback's
+        # per-frame callback (which write_status waits on) appears to count
+        # frames as they're queued rather than as they're actually flushed to
+        # disk. Wait here for the frame count to actually reach
+        # expected_frame_count instead of trusting the status file alone.
+        frame_wait_timeout = 600
+        frame_wait_interval = 2
+        frame_elapsed = 0
+
+        while True:
+            frames_so_far = self._find_rendered_frames(output_dir, base_name)
+            if len(frames_so_far) >= expected_frame_count:
+                break
+
+            engine.show_busy(
+                "Rendering...",
+                "Harmony reported the render complete — waiting for all %d "
+                "frame(s) to finish writing to disk (%d so far, %ds "
+                "elapsed)..." % (expected_frame_count, len(frames_so_far), frame_elapsed),
+            )
+            time.sleep(frame_wait_interval)
+            frame_elapsed += frame_wait_interval
+            if frame_elapsed >= frame_wait_timeout:
+                engine.clear_busy()
+                self.logger.warning(
+                    "Timed out after %ds waiting for all %d frame(s) to "
+                    "appear on disk; found %d. Proceeding with what exists."
+                    % (frame_wait_timeout, expected_frame_count, len(frames_so_far))
+                )
+                return
+
+        engine.clear_busy()
 
     def _native_frame_number(self, path):
         """
