@@ -9,6 +9,7 @@
 # not expressly granted therein are reserved by Shotgun Software Inc.
 
 import os
+import sys
 import glob
 import shutil
 import fnmatch
@@ -319,7 +320,35 @@ class HarmonySessionPublishPlugin(HookBaseClass):
 
         # let the base class register the publish
         super(HarmonySessionPublishPlugin, self).publish(settings, item)
-        item.properties.sg_publish_path = item.properties.sg_publish_data["path"]["local_path"]
+
+        # ShotGrid only populates "local_path" (and the platform-specific
+        # local_path_windows/mac/linux variants) on the returned Local File
+        # Link when it recognizes the registered path as belonging to a
+        # known Local Storage. If it doesn't recognize it (e.g. a Local
+        # Storage path mismatch), the link comes back as a plain "web" link
+        # instead, with none of those keys present. Rather than hard-crash
+        # on that, fall back through the platform-specific keys and finally
+        # to the path we ourselves just registered.
+        sg_publish_path_data = item.properties.sg_publish_data.get("path") or {}
+        platform_key = {
+            "win32": "local_path_windows",
+            "darwin": "local_path_mac",
+        }.get(sys.platform, "local_path_linux")
+        sg_publish_path = (
+            sg_publish_path_data.get("local_path")
+            or sg_publish_path_data.get(platform_key)
+            or path
+        )
+        if not sg_publish_path_data.get("local_path"):
+            self.logger.warning(
+                "ShotGrid did not return a resolved local path for this "
+                "publish (registered as a '%s' link) - falling back to the "
+                "path used for registration. This usually means the "
+                "publish path doesn't match a configured Local Storage." % (
+                    sg_publish_path_data.get("link_type", "unknown"),
+                )
+            )
+        item.properties.sg_publish_path = sg_publish_path
 
     def finalize(self, settings, item):
         """

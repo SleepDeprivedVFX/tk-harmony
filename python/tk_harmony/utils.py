@@ -9,7 +9,14 @@ __contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 
 
 def normpath(path):
-    return os.path.abspath(os.path.realpath(path)).replace("\\", "/")
+    # Deliberately NOT using os.path.realpath() here: on Windows it resolves
+    # mapped network drives to their UNC target (since Python 3.8), which
+    # silently turns e.g. S:\Projects\... into \\server\share\Projects\....
+    # Toolkit's templates/roots are registered against the mapped-drive form,
+    # so that rewrite broke template field resolution for any path this
+    # engine handed back (get_current_project_path, open_project, etc.).
+    # abspath() alone normalizes without touching drive-vs-UNC identity.
+    return os.path.abspath(path).replace("\\", "/")
 
 
 class Cached(object):
