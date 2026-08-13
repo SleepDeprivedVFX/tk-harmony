@@ -10,11 +10,41 @@
 
 import os
 import re
+import time
 
 import sgtk
 
 
 HookBaseClass = sgtk.get_hook_baseclass()
+
+
+# TODO: this retry helper is duplicated in publish_session.py/
+# publish_element.py/publish_palette.py/publish_template.py — all four call
+# the base publish_file.py hook's validate(), which is where this failure
+# mode lives.
+def _retry_on_shotgun_connectivity_error(fn, logger, max_attempts=3, delay_seconds=3):
+    """
+    Calls fn() (a zero-arg callable), retrying up to max_attempts times if it
+    raises sgtk.util.ShotgunPublishError — a live ShotGrid API failure
+    inside the base class validate()'s conflict check, confirmed live as a
+    transient stale-connection issue rather than a real validation result.
+    See publish_session.py for the full writeup.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except sgtk.util.ShotgunPublishError as e:
+            if attempt >= max_attempts:
+                logger.error(
+                    "ShotGrid connectivity error persisted after %d "
+                    "attempt(s): %s" % (max_attempts, e)
+                )
+                raise
+            logger.warning(
+                "ShotGrid connectivity error (attempt %d/%d): %s -- "
+                "retrying in %ds..." % (attempt, max_attempts, e, delay_seconds)
+            )
+            time.sleep(delay_seconds)
 
 
 class HarmonyPalettePublishPlugin(HookBaseClass):
@@ -163,7 +193,10 @@ class HarmonyPalettePublishPlugin(HookBaseClass):
         item.properties["publish_name"] = raw_name
         item.properties["publish_type"] = "Harmony Palette"
 
-        return super(HarmonyPalettePublishPlugin, self).validate(settings, item)
+        return _retry_on_shotgun_connectivity_error(
+            lambda: super(HarmonyPalettePublishPlugin, self).validate(settings, item),
+            self.logger,
+        )
 
     def publish(self, settings, item):
         """

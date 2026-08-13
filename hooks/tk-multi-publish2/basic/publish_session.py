@@ -10,6 +10,7 @@
 
 import os
 import sys
+import time
 import glob
 import shutil
 import fnmatch
@@ -23,6 +24,50 @@ __contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 
 
 HookBaseClass = sgtk.get_hook_baseclass()
+
+
+# TODO: this retry helper is duplicated in publish_session.py/
+# publish_element.py/publish_palette.py/publish_template.py — all four call
+# the base publish_file.py hook's validate(), which is where this failure
+# mode lives.
+def _retry_on_shotgun_connectivity_error(fn, logger, max_attempts=3, delay_seconds=3):
+    """
+    Calls fn() (a zero-arg callable), retrying up to max_attempts times if it
+    raises sgtk.util.ShotgunPublishError. That error is raised deep inside
+    register_publish() — called by the base class validate()'s
+    get_conflicting_publishes() check — specifically when the live ShotGrid
+    API call itself fails (as opposed to a plain Exception, raised when the
+    call succeeds but finds a genuine conflicting publish; that is NOT
+    retried here, since it's a real validation result, not a network
+    failure).
+
+    Confirmed live: a publish failed with ShotgunPublishError wrapping
+    "RemoteDisconnected: Remote end closed connection without response",
+    immediately followed by a fresh-connection SSL handshake TimeoutError —
+    the classic signature of a stale pooled HTTP keep-alive connection (SG
+    Desktop/the engine had a connection open from earlier in the session;
+    something silently closed it; the retry's fresh connection then hit a
+    momentary network hiccup). Not reproducible with a quick publish right
+    after opening the dialog — only after spending more time in it first
+    (e.g. reviewing the Render plugin's extra settings/items before
+    clicking Publish) — consistent with an idle-connection timeout rather
+    than anything render-specific in this plugin's own code.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except sgtk.util.ShotgunPublishError as e:
+            if attempt >= max_attempts:
+                logger.error(
+                    "ShotGrid connectivity error persisted after %d "
+                    "attempt(s): %s" % (max_attempts, e)
+                )
+                raise
+            logger.warning(
+                "ShotGrid connectivity error (attempt %d/%d): %s -- "
+                "retrying in %ds..." % (attempt, max_attempts, e, delay_seconds)
+            )
+            time.sleep(delay_seconds)
 
 
 class HarmonySessionPublishPlugin(HookBaseClass):
@@ -290,8 +335,13 @@ class HarmonySessionPublishPlugin(HookBaseClass):
         # step. NOTE: this path could change prior to the publish phase.
         item.properties["path"] = path
 
-        # run the base class validation
-        return super(HarmonySessionPublishPlugin, self).validate(settings, item)
+        # run the base class validation — wrapped with a retry in case
+        # get_conflicting_publishes()'s live ShotGrid call hits a transient
+        # connectivity blip (see _retry_on_shotgun_connectivity_error above)
+        return _retry_on_shotgun_connectivity_error(
+            lambda: super(HarmonySessionPublishPlugin, self).validate(settings, item),
+            self.logger,
+        )
 
     def publish(self, settings, item):
         """
