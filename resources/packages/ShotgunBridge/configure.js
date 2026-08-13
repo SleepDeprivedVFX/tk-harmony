@@ -1689,44 +1689,57 @@ function Engine()
                 var render_start_ms = Date.now();
                 var rendered_frames = 0;
 
-                // renderSceneAllWithCallback available in Harmony 17+,
-                // falls back to renderSceneAll for older versions.
-                //
-                // CONFIRMED LIVE (Harmony 25.2): renderSceneAllWithCallback
-                // is ASYNCHRONOUS — the outer call below returns almost
-                // immediately (~10-15s observed for a 96-frame render that
-                // takes 2-3 min manually), while the per-frame callback
-                // keeps firing afterward as frames actually finish in the
-                // background. Treating the outer call's return as "done"
-                // (the previous behavior) reported success and let
-                // publish_render.py start collecting frames long before
-                // the render was actually finished, mixing in stale
-                // leftover frames from earlier test attempts at the same
-                // path and producing a jumbled/out-of-order frame
-                // sequence. Completion is now determined ONLY by the
-                // callback reaching expected_frame_count.
-                if (typeof render.renderSceneAllWithCallback === "function") {
-                    self.log_warning("DIAGNOSTIC calling render.renderSceneAllWithCallback() (async — waiting for callback to reach "
-                        + expected_frame_count + " frame(s))...");
-                    render.renderSceneAllWithCallback(function(frameResult) {
-                        rendered_frames += 1;
-                        if (rendered_frames >= expected_frame_count) {
-                            self.log_warning("DIAGNOSTIC render callback reports all " + rendered_frames
-                                + " frame(s) complete after " + (Date.now() - render_start_ms) + " ms.");
-                            write_status(true, rendered_frames, "");
-                        }
-                    });
-                } else {
-                    // No per-frame callback available on this Harmony
-                    // version to confirm real completion — this path is
-                    // still assumed synchronous, as before.
-                    self.log_warning("DIAGNOSTIC renderSceneAllWithCallback not available, calling render.renderSceneAll()...");
-                    render.renderSceneAll();
-                    rendered_frames = expected_frame_count;
-                    self.log_warning("DIAGNOSTIC render.renderSceneAll() returned after " + (Date.now() - render_start_ms) + " ms.");
+                // render.renderSceneAllWithCallback() DOES NOT EXIST — confirmed
+                // against Toon Boom's own Harmony 25.2 scripting reference
+                // (classrender.html). A previous session's "CONFIRMED LIVE"
+                // claim about it being async was actually observing
+                // render.renderSceneAll() itself (see below) always taking
+                // the typeof-false fallback branch; that branch then trusted
+                // renderSceneAll()'s return as completion, which is equally
+                // wrong — it was observed returning in 0ms for a 127-frame
+                // render, i.e. it also kicks the render off asynchronously
+                // and returns immediately. The correct, documented way to
+                // detect real completion is the render.renderFinished
+                // Qt-style signal (render.frameReady fires per frame before
+                // it). Using those instead of trusting either call's return
+                // value or guessing at a callback-argument API that isn't
+                // real.
+                // var function expressions (not nested function declarations)
+                // so they're unambiguously hoisted to this function's scope
+                // and usable from the catch block below, regardless of
+                // engine-specific block-hoisting behavior.
+                var on_frame_ready = function(frame, frameCel) {
+                    rendered_frames += 1;
+                };
+
+                var on_render_finished = function() {
+                    render.frameReady.disconnect(on_frame_ready);
+                    render.renderFinished.disconnect(on_render_finished);
+                    self.log_warning("DIAGNOSTIC render.renderFinished fired after "
+                        + (Date.now() - render_start_ms) + " ms; frameReady fired "
+                        + rendered_frames + " time(s) (expected " + expected_frame_count + ").");
                     write_status(true, rendered_frames, "");
-                }
+                };
+
+                render.frameReady.connect(on_frame_ready);
+                render.renderFinished.connect(on_render_finished);
+
+                self.log_warning("DIAGNOSTIC calling render.renderSceneAll() (async — waiting for "
+                    + "render.renderFinished signal)...");
+                render.renderSceneAll();
             } catch(e) {
+                // Signals may already be connected if renderSceneAll() threw
+                // synchronously before renderFinished ever fired — disconnect
+                // is a no-op if they weren't, but leaving them connected
+                // would leak a listener onto the NEXT render attempt in this
+                // same Harmony session (multiple retries per session is the
+                // normal case here), double-counting frameReady on that one.
+                try {
+                    render.frameReady.disconnect(on_frame_ready);
+                    render.renderFinished.disconnect(on_render_finished);
+                } catch (disconnect_err) {
+                    // ignore — connect() may never have run
+                }
                 self.log_exception("RENDER_SCENE failed: " + e);
                 write_status(false, 0, e.toString());
             }
