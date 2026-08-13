@@ -1669,6 +1669,22 @@ function Engine()
                 );
             }
 
+            // render class reference (pulled Session 13 for the
+            // renderFinished/frameReady signals) also documents
+            // setWriteEnabled(bool) — "Activate or deactivate write
+            // modules during rendering". Never called anywhere in this
+            // codebase before now. Confirmed live (Session 16): with only
+            // setRenderDisplay() added, a full genuine 127-frame render
+            // ran (real per-frame Composite/Display work, correct
+            // renderFinished/frameReady signal firing, ~6 real minutes)
+            // but produced zero output files, and the Write node's own
+            // "write" step never once appeared in Harmony's render log —
+            // only Composite/Display steps did — despite the Write node
+            // being confirmed correctly connected in the node graph.
+            // Write modules are evidently opt-in per render call.
+            self.log_warning("DIAGNOSTIC render.setWriteEnabled(true)");
+            render.setWriteEnabled(true);
+
             render.frameReady.connect(on_frame_ready);
             render.renderFinished.connect(on_render_finished);
 
