@@ -1610,6 +1610,133 @@ function Engine()
         return write_node;
     };
 
+    // Shared by render_scene() (Publish2's fire-and-forget path) and
+    // render_current_version() (the standalone artist-triggered command) —
+    // both need the same "kick off render.renderSceneAll(), then wait for
+    // the real render.renderFinished signal instead of trusting either
+    // renderSceneAll()'s own return or the non-existent
+    // renderSceneAllWithCallback()" logic. See render_scene()'s own history
+    // (Session 13, DEVELOPMENT_NOTES.txt) for why this exists.
+    // on_complete(rendered_frames, elapsed_ms) fires once, after a genuine
+    // render.renderFinished. on_error(message) fires once instead if
+    // render.renderSceneAll() throws synchronously. Never both.
+    function _run_render_and_detect_completion(on_complete, on_error) {
+        var rendered_frames = 0;
+        var finished = false;
+        var render_start_ms = Date.now();
+
+        var on_frame_ready = function(frame, frameCel) {
+            rendered_frames += 1;
+        };
+
+        var on_render_finished = function() {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            render.frameReady.disconnect(on_frame_ready);
+            render.renderFinished.disconnect(on_render_finished);
+            on_complete(rendered_frames, Date.now() - render_start_ms);
+        };
+
+        render.frameReady.connect(on_frame_ready);
+        render.renderFinished.connect(on_render_finished);
+
+        try {
+            render.renderSceneAll();
+        } catch (e) {
+            if (!finished) {
+                finished = true;
+                try {
+                    render.frameReady.disconnect(on_frame_ready);
+                    render.renderFinished.disconnect(on_render_finished);
+                } catch (disconnect_err) {
+                    // ignore — connect() may never have run
+                }
+                on_error(e.toString());
+            }
+        }
+    }
+
+    self.show_harmony_message = function(data) {
+        // Lightweight way for Python to surface an error to the artist
+        // without going through engine.py's show_message()/show_error()
+        // (those use QMessageBox.exec_(), a nested modal loop — this
+        // engine runs as a detached background process that Windows won't
+        // grant foreground focus to, so exec_() can never receive the
+        // click needed to dismiss it and hangs the process forever; see
+        // MenuGenerator.show()'s popup()-not-exec_() fix for the same
+        // issue). MessageBox here runs in Harmony's own focused process,
+        // so it has no such risk.
+        MessageBox.warning(data.message || "");
+        return true;
+    };
+
+    self.render_current_version = function(data) {
+        // Standalone, artist-triggered render — completely separate from
+        // Publish2. No status file, no Python-side polling: Python resolves
+        // the Toolkit output path/format and fires this once
+        // (fire-and-forget, same as RENDER_SCENE), then this function
+        // reports success/failure directly to the artist via a native
+        // Harmony dialog once the real render.renderFinished signal fires.
+        // Exists because in-publish auto-render's completion detection has
+        // proven unreliable across Harmony versions (Sessions 9 and 13) —
+        // this gives artists a way to render and SEE it finish before ever
+        // touching Publish, so Publish's own job can shrink to "does a
+        // rendered sequence already exist for this version" (see
+        // publish_render.py's "Auto-Render if Missing" setting).
+        var output_dir    = data.output_dir;
+        var base_name     = data.base_name;
+        var file_format    = data.file_format || "PNG";
+        var leading_zeros  = data.leading_zeros || 4;
+
+        self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION received: output_dir="
+            + output_dir + " base_name=" + base_name);
+
+        singleShotTimer(0, function() {
+            try {
+                var write_node = self.configure_write_node({
+                    output_dir: output_dir,
+                    base_name: base_name,
+                    file_format: file_format,
+                    leading_zeros: leading_zeros
+                });
+                if (!write_node) {
+                    MessageBox.warning(
+                        "Render failed: could not configure the Write node — "
+                        + "see Harmony's Message Log for details."
+                    );
+                    return;
+                }
+
+                self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION calling "
+                    + "render.renderSceneAll() (async — waiting for "
+                    + "render.renderFinished signal)...");
+
+                _run_render_and_detect_completion(
+                    function(rendered_frames, elapsed_ms) {
+                        self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION "
+                            + "render.renderFinished fired after " + elapsed_ms
+                            + " ms; frameReady fired " + rendered_frames + " time(s).");
+                        MessageBox.information(
+                            "Render complete: " + rendered_frames
+                            + " frame(s) rendered to:\n" + output_dir
+                        );
+                    },
+                    function(error_msg) {
+                        self.log_exception("RENDER_CURRENT_VERSION failed: " + error_msg);
+                        MessageBox.warning("Render failed: " + error_msg);
+                    }
+                );
+            } catch (e) {
+                self.log_exception("RENDER_CURRENT_VERSION failed: " + e);
+                MessageBox.warning("Render failed: " + e.toString());
+            }
+        });
+
+        return true;  // Immediate acknowledgement — render happens asynchronously
+    };
+
     self.render_scene = function(data) {
         var start_frame  = data.start_frame;
         var stop_frame   = data.stop_frame;
@@ -1686,60 +1813,29 @@ function Engine()
                     self.log_warning("DIAGNOSTIC render.setRenderMode/DRAFT not available in this Harmony version — skipping, rendering at default quality.");
                 }
 
-                var render_start_ms = Date.now();
-                var rendered_frames = 0;
-
                 // render.renderSceneAllWithCallback() DOES NOT EXIST — confirmed
                 // against Toon Boom's own Harmony 25.2 scripting reference
-                // (classrender.html). A previous session's "CONFIRMED LIVE"
-                // claim about it being async was actually observing
-                // render.renderSceneAll() itself (see below) always taking
-                // the typeof-false fallback branch; that branch then trusted
-                // renderSceneAll()'s return as completion, which is equally
-                // wrong — it was observed returning in 0ms for a 127-frame
-                // render, i.e. it also kicks the render off asynchronously
-                // and returns immediately. The correct, documented way to
-                // detect real completion is the render.renderFinished
-                // Qt-style signal (render.frameReady fires per frame before
-                // it). Using those instead of trusting either call's return
-                // value or guessing at a callback-argument API that isn't
-                // real.
-                // var function expressions (not nested function declarations)
-                // so they're unambiguously hoisted to this function's scope
-                // and usable from the catch block below, regardless of
-                // engine-specific block-hoisting behavior.
-                var on_frame_ready = function(frame, frameCel) {
-                    rendered_frames += 1;
-                };
-
-                var on_render_finished = function() {
-                    render.frameReady.disconnect(on_frame_ready);
-                    render.renderFinished.disconnect(on_render_finished);
-                    self.log_warning("DIAGNOSTIC render.renderFinished fired after "
-                        + (Date.now() - render_start_ms) + " ms; frameReady fired "
-                        + rendered_frames + " time(s) (expected " + expected_frame_count + ").");
-                    write_status(true, rendered_frames, "");
-                };
-
-                render.frameReady.connect(on_frame_ready);
-                render.renderFinished.connect(on_render_finished);
-
+                // (classrender.html). The correct, documented way to detect
+                // real completion is the render.renderFinished Qt-style
+                // signal (render.frameReady fires per frame before it) — see
+                // _run_render_and_detect_completion() above, shared with
+                // render_current_version().
                 self.log_warning("DIAGNOSTIC calling render.renderSceneAll() (async — waiting for "
                     + "render.renderFinished signal)...");
-                render.renderSceneAll();
+
+                _run_render_and_detect_completion(
+                    function(rendered_frames, elapsed_ms) {
+                        self.log_warning("DIAGNOSTIC render.renderFinished fired after "
+                            + elapsed_ms + " ms; frameReady fired " + rendered_frames
+                            + " time(s) (expected " + expected_frame_count + ").");
+                        write_status(true, rendered_frames, "");
+                    },
+                    function(error_msg) {
+                        self.log_exception("RENDER_SCENE failed: " + error_msg);
+                        write_status(false, 0, error_msg);
+                    }
+                );
             } catch(e) {
-                // Signals may already be connected if renderSceneAll() threw
-                // synchronously before renderFinished ever fired — disconnect
-                // is a no-op if they weren't, but leaving them connected
-                // would leak a listener onto the NEXT render attempt in this
-                // same Harmony session (multiple retries per session is the
-                // normal case here), double-counting frameReady on that one.
-                try {
-                    render.frameReady.disconnect(on_frame_ready);
-                    render.renderFinished.disconnect(on_render_finished);
-                } catch (disconnect_err) {
-                    // ignore — connect() may never have run
-                }
                 self.log_exception("RENDER_SCENE failed: " + e);
                 write_status(false, 0, e.toString());
             }
@@ -1934,6 +2030,8 @@ function Engine()
         // Render
         self.registerCallback("CONFIGURE_WRITE_NODE", self.configure_write_node);
         self.registerCallback("RENDER_SCENE", self.render_scene);
+        self.registerCallback("RENDER_CURRENT_VERSION", self.render_current_version);
+        self.registerCallback("SHOW_HARMONY_MESSAGE", self.show_harmony_message);
 
         // Camera / scene data export
         self.registerCallback("EXPORT_CAMERA_DATA", self.export_camera_data);

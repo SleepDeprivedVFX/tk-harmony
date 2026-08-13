@@ -505,6 +505,39 @@ class Application(QTcpSocketClient):
             status_path=status_path,
         )
 
+    def render_current_version(self, output_dir, base_name, file_format="PNG", leading_zeros=4):
+        """
+        Fire-and-forget trigger for the standalone "Render Current Version"
+        engine command (see engine.py, python/tk_harmony/render_utils.py).
+        Unlike render_scene(), the Write node configuration happens on the
+        JS side as part of the same RENDER_CURRENT_VERSION round trip
+        (configure.js's render_current_version()), and completion is
+        reported directly to the artist via a native Harmony dialog
+        (render.renderFinished) — there is no status file and no
+        Python-side polling for this command at all. Exists specifically
+        so artists can trigger a render and watch it finish without ever
+        touching Publish2 (see Session 13, DEVELOPMENT_NOTES.txt).
+        """
+        output_dir = output_dir.replace("\\", "/")
+        self.send_command(
+            "RENDER_CURRENT_VERSION",
+            output_dir=output_dir,
+            base_name=base_name,
+            file_format=file_format,
+            leading_zeros=leading_zeros,
+        )
+
+    def show_harmony_message(self, message):
+        """
+        Shows a warning dialog inside Harmony's own (focused) process.
+        Deliberately NOT using engine.show_error()/show_message() — those
+        call QMessageBox.exec_(), which nests a modal event loop this
+        detached background process's window can never receive focus to
+        dismiss (same class of bug already fixed for the Shotgun menu
+        itself in menu_generation.py). Fire-and-forget; nothing to wait for.
+        """
+        self.send_command("SHOW_HARMONY_MESSAGE", message=message)
+
     def export_camera_data(self, camera_node, start_frame, stop_frame):
         """
         Reads per-frame transform data for a camera node (and its driving

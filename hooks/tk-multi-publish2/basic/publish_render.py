@@ -125,6 +125,21 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
                 "not valid and silently falls back to Harmony's own "
                 "default (TGA); 'PNG' is the confirmed-valid value.",
             },
+            "Auto-Render if Missing": {
+                "type": "bool",
+                "default": False,
+                "description": "If no rendered frames are found for this "
+                "version, automatically trigger a render via Harmony and "
+                "wait for it to finish before publishing. Disabled by "
+                "default — render-completion detection triggered from "
+                "inside Publish2 has proven unreliable across Harmony "
+                "versions (see Sessions 9 and 13, DEVELOPMENT_NOTES.txt). "
+                "The recommended workflow is to render first via Harmony's "
+                "Shotgun menu -> 'Render Current Version' (where you can "
+                "watch it actually finish), then run Publish, which will "
+                "just pick up the rendered frames. Enable this only if you "
+                "want Publish to attempt the render itself.",
+            },
         }
 
         base_settings.update(render_settings)
@@ -308,6 +323,21 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             self.logger.info(
                 "Found %d already-rendered frame(s) for this version at '%s' — "
                 "skipping render." % (len(existing_frames), output_dir)
+            )
+        elif not settings.get("Auto-Render if Missing").value:
+            # Default path: don't attempt an in-publish render at all.
+            # Render-completion detection triggered from inside Publish2
+            # has proven unreliable across Harmony versions more than once
+            # (Sessions 9 and 13, DEVELOPMENT_NOTES.txt) — rather than gamble
+            # on it again here, point the artist at the standalone command
+            # where they can watch a render actually finish before
+            # publishing picks it up.
+            raise Exception(
+                "No rendered frames found for this version at '%s'. Render "
+                "it first via Harmony's Shotgun menu -> 'Render Current "
+                "Version', then re-run Publish. (Auto-render can be "
+                "re-enabled via this plugin's 'Auto-Render if Missing' "
+                "setting.)" % output_dir
             )
         else:
             self._render(

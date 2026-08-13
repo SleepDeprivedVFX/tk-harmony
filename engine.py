@@ -283,6 +283,68 @@ class HarmonyEngine(Engine):
             },
         )
 
+    def __register_render_current_version_command(self):
+        """
+        Registers a standalone "Render Current Version" command — triggers
+        a render via Harmony directly, completely outside Publish2, and
+        reports completion via a native Harmony dialog (configure.js's
+        render_current_version()). Exists because in-publish auto-render
+        completion detection has proven unreliable across Harmony versions
+        (Sessions 9 and 13, DEVELOPMENT_NOTES.txt) — this lets artists
+        render and SEE it finish before ever touching Publish, so Publish
+        can shrink to "does a rendered sequence already exist" (see
+        publish_render.py's "Auto-Render if Missing" setting).
+        """
+        self.register_command(
+            "Render Current Version",
+            self.__render_current_version_command,
+            {
+                "short_name": "render_current_version",
+                "description": (
+                    "Renders the current Harmony session to its "
+                    "Toolkit-computed output location and reports "
+                    "completion via a Harmony dialog."
+                ),
+                "type": "context_menu",
+            },
+        )
+
+    def __render_current_version_command(self):
+        """
+        Callback for "Render Current Version". Resolves the render output
+        path (same logic the Render publish plugin uses) and fires a
+        fire-and-forget trigger — deliberately does NOT block waiting for
+        completion here: this callback runs inside this engine's own
+        detached process/event loop, and a blocking poll would freeze the
+        same socket connection used to talk to Harmony. Harmony reports
+        success/failure directly via its own native dialog once
+        render.renderFinished actually fires.
+        """
+        try:
+            paths = self.tk_harmony.render_utils.resolve_render_paths(self)
+        except self.tk_harmony.render_utils.RenderPathError as e:
+            self.logger.warning("Render Current Version: %s" % e)
+            self.app.show_harmony_message("Render failed: %s" % e)
+            return
+        except Exception as e:
+            self.logger.error(
+                "Render Current Version: unexpected error resolving render "
+                "path: %s" % e
+            )
+            self.app.show_harmony_message("Render failed: %s" % e)
+            return
+
+        self.logger.info(
+            "Render Current Version: triggering render to '%s' — watch "
+            "Harmony for a completion dialog." % paths["output_dir"]
+        )
+        self.app.render_current_version(
+            output_dir=paths["output_dir"],
+            base_name=paths["base_name"],
+            file_format=paths["image_format"],
+            leading_zeros=paths["leading_zeros"],
+        )
+
     def reload_command(self, *args, **kwargs):
         """
         We inform the Harmony engine that we are about to restart the engine,
@@ -523,6 +585,7 @@ class HarmonyEngine(Engine):
 
         # for some reason this engine command get's lost so we add it back
         self.__register_reload_command()
+        self.__register_render_current_version_command()
 
         # Run a series of app instance commands at startup.
         self._run_app_instance_commands()
@@ -571,6 +634,7 @@ class HarmonyEngine(Engine):
         # a context is changed
         self.__register_open_log_folder_command()
         self.__register_reload_command()
+        self.__register_render_current_version_command()
 
         if self.get_setting("automatic_context_switch", True):
             # finally create the menu with the new context if needed
