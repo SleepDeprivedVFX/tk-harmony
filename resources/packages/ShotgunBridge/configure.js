@@ -1639,10 +1639,39 @@ function Engine()
             on_complete(rendered_frames, Date.now() - render_start_ms);
         };
 
-        render.frameReady.connect(on_frame_ready);
-        render.renderFinished.connect(on_render_finished);
-
         try {
+            // Every documented usage of renderSceneAll() sets a render
+            // display target first (e.g. Toon Boom's own scripting example:
+            // render.setRenderDisplay("Top/Display")) — this was missing
+            // here, and is the leading suspect for a full hang observed
+            // live (Session 14): renderSceneAll() called, then dead
+            // silence forever — no error, no frameReady, no renderFinished,
+            // no frames on disk after 2.5+ minutes. Without a render
+            // target, there may be nothing for the render to composite
+            // through at all. Find the scene's actual Display node
+            // dynamically instead of hardcoding Toon Boom's example name,
+            // which may not match this scene's — same approach already
+            // used for the Write node.
+            var display_nodes = node.getNodes(["DISPLAY"]);
+            if (display_nodes && display_nodes.length > 0) {
+                if (display_nodes.length > 1) {
+                    self.log_warning(
+                        "DIAGNOSTIC multiple DISPLAY nodes found, using "
+                        + "only the first: " + display_nodes[0]
+                    );
+                }
+                self.log_warning("DIAGNOSTIC render.setRenderDisplay(" + display_nodes[0] + ")");
+                render.setRenderDisplay(display_nodes[0]);
+            } else {
+                self.log_warning(
+                    "DIAGNOSTIC no DISPLAY node found in scene — skipping "
+                    + "setRenderDisplay; render may have no target."
+                );
+            }
+
+            render.frameReady.connect(on_frame_ready);
+            render.renderFinished.connect(on_render_finished);
+
             render.renderSceneAll();
         } catch (e) {
             if (!finished) {
