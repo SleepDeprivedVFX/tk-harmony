@@ -466,66 +466,28 @@ class Application(QTcpSocketClient):
     def relink_sound_column(self, column_name, path):
         return self.send_and_receive_command("RELINK_SOUND_COLUMN", column_name=column_name, path=path)
 
-    def configure_write_node(self, output_dir, base_name, file_format="PNG", leading_zeros=4):
+    def update_render_nodes(self, nodes):
         """
-        Points the scene's Write node(s) at a Toolkit-computed output
-        location/format, so a subsequent render_scene() call actually lands
-        where the render publish plugin expects it. This must be called
-        BEFORE render_scene() — render_scene() no longer takes a path at
-        all; the Write node itself now owns that.
+        Points each of the scene's Write nodes at its own Toolkit-computed
+        output location/format. `nodes` is a list of dicts, one per Write
+        node: {"node": <full node path>, "output_dir": ..., "base_name":
+        ..., "file_format": ..., "leading_zeros": ...} — see
+        python/tk_harmony/render_utils.py (discover_write_node_passes() +
+        resolve_render_paths_for_pass()) for how the caller builds this.
 
-        leading_zeros must match the {SEQ} template key's frame padding —
-        publish_render.py hardcodes 4-digit frame numbers in its FFmpeg
-        command and PublishedFile sequence registration.
+        Deliberately does not trigger a render — see engine.py's "Update
+        Render Nodes" command and configure.js's update_render_nodes() for
+        why (the scripted render-trigger path never got a correctly-
+        configured Write node to actually execute, across Sessions 14-17,
+        and was retired).
 
-        Uses send_and_receive (not fire-and-forget) so a failure to find or
-        configure a Write node is surfaced immediately rather than only
-        discovered later when no rendered frames turn up.
+        Uses send_and_receive (not fire-and-forget) so failures are
+        surfaced immediately. Returns {"updated": [...], "failed": [...]}
+        (full node paths in each list).
         """
-        output_dir = output_dir.replace("\\", "/")
-        return self.send_and_receive_command(
-            "CONFIGURE_WRITE_NODE",
-            output_dir=output_dir,
-            base_name=base_name,
-            file_format=file_format,
-            leading_zeros=leading_zeros,
-        )
-
-    def render_scene(self, start_frame, stop_frame, status_path):
-        # NOTE: output path/format are no longer passed here — call
-        # configure_write_node() first. Previously this method accepted
-        # output_dir/base_name/file_format, but configure.js's render_scene()
-        # never actually applied them to the render (dead code) — the Write
-        # node's own output setting is what actually determined where frames
-        # landed, regardless of what was passed here.
-        self.send_command(
-            "RENDER_SCENE",
-            start_frame=start_frame,
-            stop_frame=stop_frame,
-            status_path=status_path,
-        )
-
-    def render_current_version(self, output_dir, base_name, file_format="PNG", leading_zeros=4):
-        """
-        Fire-and-forget trigger for the standalone "Render Current Version"
-        engine command (see engine.py, python/tk_harmony/render_utils.py).
-        Unlike render_scene(), the Write node configuration happens on the
-        JS side as part of the same RENDER_CURRENT_VERSION round trip
-        (configure.js's render_current_version()), and completion is
-        reported directly to the artist via a native Harmony dialog
-        (render.renderFinished) — there is no status file and no
-        Python-side polling for this command at all. Exists specifically
-        so artists can trigger a render and watch it finish without ever
-        touching Publish2 (see Session 13, DEVELOPMENT_NOTES.txt).
-        """
-        output_dir = output_dir.replace("\\", "/")
-        self.send_command(
-            "RENDER_CURRENT_VERSION",
-            output_dir=output_dir,
-            base_name=base_name,
-            file_format=file_format,
-            leading_zeros=leading_zeros,
-        )
+        for entry in nodes:
+            entry["output_dir"] = entry["output_dir"].replace("\\", "/")
+        return self.send_and_receive_command("UPDATE_RENDER_NODES", nodes=nodes)
 
     def show_harmony_message(self, message):
         """

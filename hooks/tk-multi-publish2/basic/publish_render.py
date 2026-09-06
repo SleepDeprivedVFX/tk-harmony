@@ -9,18 +9,10 @@
 # not expressly granted therein are reserved by Shotgun Software Inc.
 
 import os
-import re
 import sys
-import glob
-import json
-import time
-import uuid
-import shutil
-import tempfile
 import subprocess
 
 import sgtk
-from sgtk.util.filesystem import ensure_folder_exists
 
 
 __author__ = "Adam Benson"
@@ -30,10 +22,6 @@ __contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 
 HookBaseClass = sgtk.get_hook_baseclass()
 
-
-# common frame image extensions to look for when falling back to Harmony's
-# own native output folder (see _find_rendered_frames below)
-FALLBACK_FRAME_EXTENSIONS = ("png", "tga", "tif", "tiff", "jpg")
 
 # FFmpeg binaries optionally bundled with this repo, relative to the
 # engine's disk location, keyed by sys.platform. Lets the plugin work with
@@ -49,43 +37,41 @@ BUNDLED_FFMPEG = {
 
 class HarmonyRenderPublishPlugin(HookBaseClass):
     """
-    Plugin for rendering a Harmony session and publishing the result to
-    ShotGrid as a Version, an image sequence PublishedFile, and a movie
-    PublishedFile.
+    Plugin for publishing one render pass (one Write node's output) from a
+    Harmony session to ShotGrid as an image sequence PublishedFile, and —
+    for exactly one designated "main" pass — also a transcoded movie
+    PublishedFile plus a Version for web review.
 
-    1. Points the scene's Write node at a Toolkit-computed path/format
-       (CONFIGURE_WRITE_NODE — best-effort, see configure.js).
-    2. Sends RENDER_SCENE to Harmony (fire-and-forget, no response waited
-       for — renders can run far longer than the socket's read timeout).
-    3. Polls a temp JSON status file that Harmony writes when done.
-    4. Locates the rendered frames — checks the Toolkit path first, and
-       falls back to searching the project's native frames/ folder (in
-       case the Write node redirect in step 1 didn't take effect) and
-       copying them into place.
-    5. Transcodes the image sequence to a .mov via FFmpeg.
-    6. Publishes the sequence and the movie as separate PublishedFiles, and
-       creates a Version for web review from the movie.
+    Multi-pass rework (see DEVELOPMENT_NOTES.txt): a scene can hold several
+    Write nodes at once, one per compositing layer (e.g. "Background",
+    "Ship", "Characters"). The collector (collector.py's
+    collect_harmony_renders()) creates one harmony.render item per Write
+    node found live in the scene; this plugin runs once per item.
 
-    If a render for the current version already exists on disk, steps 1-4
-    are skipped entirely and this just publishes what's already there —
-    no need to force a re-render for something already rendered outside a
-    publish session.
+    Rendering itself is never triggered from here — the scripted render
+    trigger (render.renderSceneAll() + friends) never got a correctly-
+    configured Write node to actually execute across several sessions of
+    trying, and was retired. The workflow is: run the "Update Render
+    Nodes" engine command to point every Write node at its Toolkit path,
+    render manually via Harmony's own native Render command, then Publish
+    picks up whatever frames exist on disk for each pass.
     """
 
     @property
     def description(self):
         return """
-        Renders the current Harmony scene (via its Write node) and publishes
-        the result to ShotGrid as an image sequence and a movie.
+        Publishes one render pass (one Write node) of the current Harmony
+        scene to ShotGrid as an image sequence. The pass whose Write node
+        name matches the "Main Render Pass Name" setting is additionally
+        transcoded to a .mov via FFmpeg and registered as a movie
+        PublishedFile plus a Version for web review — other passes publish
+        as sequence-only, for compositing.
 
-        If a render already exists on disk for the current version, it is
-        published as-is — no re-render is triggered. Otherwise the render is
-        triggered via a fire-and-forget command to Harmony, and Python polls
-        a temporary status file until Harmony signals completion. The
-        rendered image sequence is then transcoded to a .mov via FFmpeg.
-
-        The plugin is <b>unchecked by default</b> — enable it explicitly when
-        you want to include a render publish in the current session.
+        Does not render. Frames must already exist on disk for a pass
+        (render manually in Harmony, after running the Shotgun menu's
+        "Update Render Nodes" command to point every Write node at the
+        correct output location) — a pass with no frames on disk fails
+        validation with a message pointing at that workflow.
         """
 
     @property
@@ -96,7 +82,7 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             "Render Sequence Template": {
                 "type": "template",
                 "default": None,
-                "description": "ShotGrid template for the rendered image "
+                "description": "ShotGrid template for a rendered image "
                 "sequence path. Should correspond to a "
                 "template defined in templates.yml (e.g. "
                 "harmony_shot_render_sequence).",
@@ -109,36 +95,23 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
                 "defined in templates.yml (e.g. "
                 "harmony_shot_render_movie).",
             },
+            "Main Render Pass Name": {
+                "type": "str",
+                "default": "Comp",
+                "description": "The Write node name (case-insensitive) "
+                "that identifies the scene's designated 'main' render "
+                "pass — that pass, and only that pass, gets FFmpeg-"
+                "transcoded and registered as a movie PublishedFile plus "
+                "a ShotGrid Version for review. Every other pass publishes "
+                "as a sequence only. If no Write node in the scene matches "
+                "this name, all passes still publish as sequences; no "
+                "Version is created.",
+            },
             "FFmpeg Path": {
                 "type": "str",
                 "default": "ffmpeg",
                 "description": "Path to the ffmpeg executable. Defaults to "
                 "'ffmpeg', assuming it is available on the system PATH.",
-            },
-            "Image Format": {
-                "type": "str",
-                "default": "PNG",
-                "description": "Harmony render format string passed to the "
-                "CONFIGURE_WRITE_NODE command. Must match a value Harmony's "
-                "DRAWING_TYPE attribute actually accepts on the target "
-                "version — confirmed live on Harmony 25.2 that 'PNG4' is "
-                "not valid and silently falls back to Harmony's own "
-                "default (TGA); 'PNG' is the confirmed-valid value.",
-            },
-            "Auto-Render if Missing": {
-                "type": "bool",
-                "default": False,
-                "description": "If no rendered frames are found for this "
-                "version, automatically trigger a render via Harmony and "
-                "wait for it to finish before publishing. Disabled by "
-                "default — render-completion detection triggered from "
-                "inside Publish2 has proven unreliable across Harmony "
-                "versions (see Sessions 9 and 13, DEVELOPMENT_NOTES.txt). "
-                "The recommended workflow is to render first via Harmony's "
-                "Shotgun menu -> 'Render Current Version' (where you can "
-                "watch it actually finish), then run Publish, which will "
-                "just pick up the rendered frames. Enable this only if you "
-                "want Publish to attempt the render itself.",
             },
         }
 
@@ -147,7 +120,7 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
 
     @property
     def item_filters(self):
-        return ["harmony.session"]
+        return ["harmony.render"]
 
     def accept(self, settings, item):
         sequence_template_setting = settings.get("Render Sequence Template")
@@ -164,22 +137,20 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             )
             return {"accepted": False}
 
-        work_template = item.properties.get("work_template")
-        if not work_template:
-            self.logger.debug(
-                "No work_template found on item. The render publish plugin "
-                "will not be accepted."
-            )
-            return {"accepted": False}
-
         self.logger.info(
-            "Harmony render publish plugin accepted the current session."
+            "Harmony render publish plugin accepted pass '%s'."
+            % item.properties.get("pass_name_raw")
         )
-        return {"accepted": True, "checked": False}
+        # render passes are core scene output (unlike Palette/Element's
+        # incidental WIP scraps) — checked by default.
+        return {"accepted": True, "checked": True}
 
     def validate(self, settings, item):
         publisher = self.parent
         engine = publisher.engine
+        render_utils = engine.tk_harmony.render_utils
+
+        pass_name_raw = item.properties["pass_name_raw"]
 
         # --- confirm session is saved
         current_path = engine.app.get_current_project_path()
@@ -196,65 +167,17 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             self.logger.error(error_msg)
             raise Exception(error_msg)
 
-        # --- resolve render templates
-        sequence_template = publisher.engine.get_template_by_name(
-            settings.get("Render Sequence Template").value
-        )
-        movie_template = publisher.engine.get_template_by_name(
-            settings.get("Render Movie Template").value
-        )
-        if not sequence_template or not movie_template:
-            error_msg = (
-                "Could not resolve the render sequence/movie templates. "
-                "Check your templates.yml."
-            )
-            self.logger.error(error_msg)
-            raise Exception(error_msg)
-
-        work_template = item.properties.get("work_template")
-        work_fields = work_template.get_fields(current_path)
-
-        render_fields = {}
-        for key in sequence_template.keys:
-            if key in work_fields:
-                render_fields[key] = work_fields[key]
-
-        if "version" not in render_fields:
-            render_fields["version"] = work_fields.get("version", 1)
-
-        if "name" not in render_fields:
-            # {name} is a distinct render-pass label, not the shot/asset code
-            # (Shot/Asset already appear as their own keys in the render
-            # template path) — the Harmony work template has no {name} key,
-            # so this always falls through to the literal default today.
-            render_fields["name"] = work_fields.get("name", "render")
-
+        # --- resolve this pass's output paths (shared with the "Update
+        # Render Nodes" engine command, so they can never drift apart)
+        pass_name = render_utils.sanitize_pass_name(pass_name_raw)
         try:
-            # SEQ is a formatting placeholder here, not a real frame number —
-            # apply_fields with a literal frame-number placeholder isn't
-            # possible via the normal API, so build the sequence path with a
-            # representative frame and derive the glob/ffmpeg patterns from it
-            sequence_fields = dict(render_fields)
-            sequence_fields["SEQ"] = 1
-            sample_frame_path = sequence_template.apply_fields(sequence_fields)
-            output_dir = os.path.dirname(sample_frame_path)
-            base_name = os.path.basename(sample_frame_path).split(".")[0]
+            paths = render_utils.resolve_render_paths_for_pass(engine, pass_name)
+        except render_utils.RenderPathError as e:
+            self.logger.error(str(e))
+            raise Exception(str(e))
 
-            video_path = movie_template.apply_fields(render_fields)
-        except Exception as e:
-            error_msg = "Could not resolve render templates to a path: %s" % e
-            self.logger.error(error_msg)
-            raise Exception(error_msg)
-
-        # Harmony's LEADING_ZEROS Write node attribute pads to a total width
-        # of (LEADING_ZEROS + 1), not LEADING_ZEROS itself — confirmed live
-        # by a rendered v005 sequence coming out 5 digits wide
-        # ("...v005.00001.png") when leading_zeros=4 was passed. Derive the
-        # value from the SEQ key's own format_spec instead of hardcoding it,
-        # so this stays correct if the template's padding width ever changes.
-        seq_format_spec = sequence_template.keys["SEQ"].format_spec
-        seq_width = int(seq_format_spec) if seq_format_spec else 4
-        leading_zeros = max(seq_width - 1, 0)
+        output_dir = paths["output_dir"]
+        base_name = paths["base_name"]
 
         # check output dir is writable (or its parent, if it doesn't exist yet)
         check_dir = output_dir if os.path.exists(output_dir) else os.path.dirname(output_dir)
@@ -263,41 +186,57 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
             self.logger.error(error_msg)
             raise Exception(error_msg)
 
-        # stash resolved paths for publish()
-        item.properties["sequence_template"] = sequence_template
-        item.properties["movie_template"] = movie_template
-        item.properties["render_fields"] = render_fields
-        item.properties["output_dir"] = output_dir
-        item.properties["base_name"] = base_name
-        item.properties["video_path"] = video_path
-        item.properties["leading_zeros"] = leading_zeros
-
-        # --- confirm ffmpeg is available
-        ffmpeg_path = self._resolve_ffmpeg_path(engine, settings)
-        try:
-            subprocess.run(
-                [ffmpeg_path, "-version"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except FileNotFoundError:
+        # --- confirm frames already exist for this pass — this plugin never
+        # triggers a render itself
+        existing_frames = render_utils.find_rendered_frames(output_dir, base_name)
+        if not existing_frames:
             error_msg = (
-                "FFmpeg not found at '%s'. Install FFmpeg, bundle it under "
-                "resources/bin/, or set the 'FFmpeg Path' plugin setting to "
-                "the correct path." % ffmpeg_path
+                "No rendered frames found for pass '%s' at '%s'. Run the "
+                "Shotgun menu's 'Update Render Nodes' command, render the "
+                "scene manually in Harmony, then re-run Publish."
+                % (pass_name_raw, output_dir)
             )
             self.logger.error(error_msg)
             raise Exception(error_msg)
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(
-                "FFmpeg returned a non-zero exit code during version check, "
-                "but the executable was found. Proceeding. (%s)" % e
-            )
 
-        # stash so publish() uses the exact same resolved path, not a fresh
-        # (and potentially different, if disk state changed) resolution
-        item.properties["ffmpeg_path"] = ffmpeg_path
+        # --- is this the designated "main" pass? (case-insensitive match
+        # against the Write node's own, un-sanitized name)
+        main_pass_setting = (settings.get("Main Render Pass Name").value or "").strip()
+        is_main = bool(main_pass_setting) and (
+            pass_name_raw.strip().lower() == main_pass_setting.lower()
+        )
+
+        item.properties["output_dir"] = output_dir
+        item.properties["base_name"] = base_name
+        item.properties["video_path"] = paths["video_path"]
+        item.properties["render_fields"] = paths["render_fields"]
+        item.properties["is_main"] = is_main
+
+        if is_main:
+            # --- confirm ffmpeg is available (only the main pass transcodes)
+            ffmpeg_path = self._resolve_ffmpeg_path(engine, settings)
+            try:
+                subprocess.run(
+                    [ffmpeg_path, "-version"],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            except FileNotFoundError:
+                error_msg = (
+                    "FFmpeg not found at '%s'. Install FFmpeg, bundle it under "
+                    "resources/bin/, or set the 'FFmpeg Path' plugin setting to "
+                    "the correct path." % ffmpeg_path
+                )
+                self.logger.error(error_msg)
+                raise Exception(error_msg)
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(
+                    "FFmpeg returned a non-zero exit code during version check, "
+                    "but the executable was found. Proceeding. (%s)" % e
+                )
+
+            item.properties["ffmpeg_path"] = ffmpeg_path
 
         return True
 
@@ -305,62 +244,61 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         publisher = self.parent
         engine = publisher.engine
         context = item.context
+        render_utils = engine.tk_harmony.render_utils
 
-        ffmpeg_path = item.properties["ffmpeg_path"]
-        image_format = settings.get("Image Format").value or "PNG"
-
-        render_fields = item.properties["render_fields"]
+        pass_name_raw = item.properties["pass_name_raw"]
         output_dir = item.properties["output_dir"]
         base_name = item.properties["base_name"]
-        video_path = item.properties["video_path"]
-        leading_zeros = item.properties["leading_zeros"]
+        render_fields = item.properties["render_fields"]
+        is_main = item.properties["is_main"]
 
-        # --- if this version has already been rendered, don't render again —
-        # just publish what's there. Covers the "artist already rendered
-        # manually, just wants to publish" case without a wasted re-render.
-        existing_frames = self._find_rendered_frames(output_dir, base_name)
-        if existing_frames:
-            self.logger.info(
-                "Found %d already-rendered frame(s) for this version at '%s' — "
-                "skipping render." % (len(existing_frames), output_dir)
-            )
-        elif not settings.get("Auto-Render if Missing").value:
-            # Default path: don't attempt an in-publish render at all.
-            # Render-completion detection triggered from inside Publish2
-            # has proven unreliable across Harmony versions more than once
-            # (Sessions 9 and 13, DEVELOPMENT_NOTES.txt) — rather than gamble
-            # on it again here, point the artist at the standalone command
-            # where they can watch a render actually finish before
-            # publishing picks it up.
-            raise Exception(
-                "No rendered frames found for this version at '%s'. Render "
-                "it first via Harmony's Shotgun menu -> 'Render Current "
-                "Version', then re-run Publish. (Auto-render can be "
-                "re-enabled via this plugin's 'Auto-Render if Missing' "
-                "setting.)" % output_dir
-            )
-        else:
-            self._render(
-                engine, output_dir, base_name, image_format, ffmpeg_path,
-                leading_zeros,
-            )
-            existing_frames = self._find_rendered_frames(output_dir, base_name)
-
-            if not existing_frames:
-                # the Write node redirect (configure_write_node) is a
-                # best-effort, unverified operation — fall back to
-                # Harmony's own native output location and copy from there
-                existing_frames = self._recover_frames_from_native_output(
-                    engine, output_dir, base_name
-                )
-
+        existing_frames = render_utils.find_rendered_frames(output_dir, base_name)
         if not existing_frames:
+            # re-checked here in case disk state changed between validate()
+            # and publish() (e.g. another process cleared the folder)
             raise Exception(
-                "No rendered frames found for this version, at '%s' or in "
-                "Harmony's native output folder." % output_dir
+                "No rendered frames found for pass '%s' at '%s'."
+                % (pass_name_raw, output_dir)
             )
 
-        self.logger.info("Using %d rendered frame(s)." % len(existing_frames))
+        self.logger.info(
+            "Using %d rendered frame(s) for pass '%s'."
+            % (len(existing_frames), pass_name_raw)
+        )
+
+        # --- register the image sequence as its own PublishedFile — every
+        # pass gets this, main or not
+        sequence_path = publisher.util.get_frame_sequence_path(
+            existing_frames[0], frame_spec="%04d"
+        )
+        # output_dir's own last path segment is "{Shot}_{name}.v{version}"
+        # (the render templates put the version in the folder, not the
+        # filename — see render_fields note in render_utils.py) — same
+        # clean, version-included name the movie template would produce,
+        # so use it here too rather than parsing it back out of a frame path.
+        sequence_publish_name = os.path.basename(output_dir)
+
+        sequence_publish_data = sgtk.util.register_publish(
+            engine.sgtk,
+            context,
+            sequence_path,
+            sequence_publish_name,
+            published_file_type="Rendered Image",
+            version_number=render_fields.get("version", 1),
+            comment=item.description,
+        )
+        item.properties["sg_publish_data"] = sequence_publish_data
+        self.logger.info(
+            "Registered image sequence PublishedFile for pass '%s': %s"
+            % (pass_name_raw, sequence_publish_data.get("id"))
+        )
+
+        if not is_main:
+            # layer passes stop here — sequence only, no movie/Version
+            return
+
+        video_path = item.properties["video_path"]
+        ffmpeg_path = item.properties["ffmpeg_path"]
 
         # --- get frame rate (default 24)
         try:
@@ -384,26 +322,6 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
         self.logger.info("Running FFmpeg: %s" % " ".join(ffmpeg_cmd))
         subprocess.run(ffmpeg_cmd, check=True)
         self.logger.info("FFmpeg transcode complete: %s" % video_path)
-
-        # --- register the image sequence as its own PublishedFile
-        sequence_path = publisher.util.get_frame_sequence_path(
-            existing_frames[0], frame_spec="%04d"
-        )
-        sequence_publish_name = os.path.splitext(os.path.basename(video_path))[0]
-
-        sequence_publish_data = sgtk.util.register_publish(
-            engine.sgtk,
-            context,
-            sequence_path,
-            sequence_publish_name,
-            published_file_type="Rendered Image",
-            version_number=render_fields.get("version", 1),
-            comment=item.description,
-        )
-        self.logger.info(
-            "Registered image sequence PublishedFile: %s"
-            % sequence_publish_data.get("id")
-        )
 
         # --- register the movie as its own PublishedFile
         movie_publish_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -503,219 +421,3 @@ class HarmonyRenderPublishPlugin(HookBaseClass):
                 )
 
         return bundled_path
-
-    def _find_rendered_frames(self, output_dir, base_name):
-        """
-        Look for an already-rendered frame sequence matching base_name at
-        the Toolkit-computed output_dir.
-        """
-        if not os.path.isdir(output_dir):
-            return []
-
-        for ext in FALLBACK_FRAME_EXTENSIONS:
-            frames = sorted(
-                glob.glob(os.path.join(output_dir, base_name + ".*." + ext))
-            )
-            if frames:
-                return frames
-
-        return []
-
-    def _clear_existing_frames(self, output_dir, base_name):
-        """
-        Remove any pre-existing frames matching base_name before a fresh
-        render. Without this, re-rendering the same version (e.g. during
-        iterative testing, or an artist re-running a publish) leaves
-        leftover frames from a prior attempt sitting alongside newly
-        rendered ones — harmless if the prior attempt used the same
-        format/frame count, but a real source of a jumbled/inconsistent
-        sequence if it didn't (different image format, partial/aborted
-        render, different frame range).
-        """
-        for ext in FALLBACK_FRAME_EXTENSIONS:
-            for f in glob.glob(os.path.join(output_dir, base_name + ".*." + ext)):
-                try:
-                    os.remove(f)
-                except OSError as e:
-                    self.logger.warning("Could not remove stale frame %s: %s" % (f, e))
-
-    def _render(self, engine, output_dir, base_name, image_format, ffmpeg_path,
-                leading_zeros):
-        """
-        Points the Write node at the Toolkit path (best-effort — see
-        configure.js CONFIGURE_WRITE_NODE), triggers the render, and blocks
-        until Harmony signals completion via the status file.
-        """
-        frame_range = engine.app.get_frame_range()
-        start_frame = int(frame_range.get("start_frame", 1))
-        stop_frame = int(frame_range.get("stop_frame", 1))
-        expected_frame_count = stop_frame - start_frame + 1
-
-        ensure_folder_exists(output_dir)
-        self._clear_existing_frames(output_dir, base_name)
-
-        # save scene before rendering
-        engine.app.save_project()
-
-        write_node = engine.app.configure_write_node(
-            output_dir=output_dir, base_name=base_name, file_format=image_format,
-            leading_zeros=leading_zeros,
-        )
-        if not write_node:
-            raise Exception(
-                "CONFIGURE_WRITE_NODE failed in Harmony (no WRITE node found, "
-                "or Harmony rejected the requested attribute values) — see "
-                "Harmony's Message Log for the underlying error. Aborting "
-                "instead of rendering to an uncontrolled location/format."
-            )
-
-        status_path = os.path.join(
-            tempfile.gettempdir(), "harmony_render_{}.json".format(uuid.uuid4().hex)
-        )
-
-        # fire render (fire-and-forget)
-        engine.app.render_scene(
-            start_frame=start_frame, stop_frame=stop_frame, status_path=status_path
-        )
-
-        # poll for status file
-        timeout_seconds = 3600
-        poll_interval = 2
-        elapsed = 0
-
-        self.logger.info(
-            "Waiting for Harmony to finish rendering (timeout: %ds)..."
-            % timeout_seconds
-        )
-
-        while not os.path.exists(status_path):
-            engine.show_busy(
-                "Rendering...",
-                "Waiting for Harmony to complete render... (%ds elapsed)" % elapsed,
-            )
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-            if elapsed >= timeout_seconds:
-                engine.clear_busy()
-                raise Exception(
-                    "Timed out waiting for Harmony render after %d seconds."
-                    % timeout_seconds
-                )
-
-        # show_busy() has no matching clear_busy() call anywhere else in
-        # this file — without this, the "Rendering..." dialog was never
-        # explicitly dismissed once polling finished.
-        engine.clear_busy()
-
-        with open(status_path, "r") as fh:
-            status = json.load(fh)
-
-        try:
-            os.remove(status_path)
-        except Exception:
-            pass
-
-        if not status.get("success", False):
-            error_msg = status.get(
-                "error", "Harmony render failed with an unknown error."
-            )
-            raise Exception("Harmony render failed: %s" % error_msg)
-
-        self.logger.info("Harmony render completed successfully.")
-
-        # Harmony's status file has been observed to report success before
-        # the rendered frames actually finish writing to disk — confirmed
-        # live: a render's frames all landed with mtimes several minutes
-        # AFTER the status file already said "done", causing the caller to
-        # find zero frames and fail outright. render.renderSceneAllWithCallback's
-        # per-frame callback (which write_status waits on) appears to count
-        # frames as they're queued rather than as they're actually flushed to
-        # disk. Wait here for the frame count to actually reach
-        # expected_frame_count instead of trusting the status file alone.
-        frame_wait_timeout = 600
-        frame_wait_interval = 2
-        frame_elapsed = 0
-
-        while True:
-            frames_so_far = self._find_rendered_frames(output_dir, base_name)
-            if len(frames_so_far) >= expected_frame_count:
-                break
-
-            engine.show_busy(
-                "Rendering...",
-                "Harmony reported the render complete — waiting for all %d "
-                "frame(s) to finish writing to disk (%d so far, %ds "
-                "elapsed)..." % (expected_frame_count, len(frames_so_far), frame_elapsed),
-            )
-            time.sleep(frame_wait_interval)
-            frame_elapsed += frame_wait_interval
-            if frame_elapsed >= frame_wait_timeout:
-                engine.clear_busy()
-                self.logger.warning(
-                    "Timed out after %ds waiting for all %d frame(s) to "
-                    "appear on disk; found %d. Proceeding with what exists."
-                    % (frame_wait_timeout, expected_frame_count, len(frames_so_far))
-                )
-                return
-
-        engine.clear_busy()
-
-    def _native_frame_number(self, path):
-        """
-        Sort key for Harmony's native frame output. Harmony's default
-        naming (e.g. "SceneName-1.tga") has no zero-padding, so a plain
-        string sort interleaves frame numbers of different digit counts
-        (1, 10, 11, ..., 19, 2, 20, ...) instead of numeric order — this
-        was the exact cause of a reproducible frame-reordering bug where
-        recovered sequences were scrambled in a repeating block-of-11-ish
-        pattern. Extract the trailing digit run immediately before the
-        extension (the frame number) and sort on that as an int instead.
-        """
-        match = re.search(r"(\d+)(?=\.\w+$)", os.path.basename(path))
-        return int(match.group(1)) if match else -1
-
-    def _recover_frames_from_native_output(self, engine, output_dir, base_name):
-        """
-        CONFIGURE_WRITE_NODE's redirect of the Write node's output is
-        unverified — if nothing landed at output_dir, look in the current
-        project's own native frames/ folder instead, and copy whatever's
-        there into output_dir under the expected naming so the rest of the
-        pipeline (ffmpeg, sequence path) doesn't need to know the
-        difference.
-        """
-        current_path = engine.app.get_current_project_path()
-        project_folder = os.path.dirname(current_path)
-        native_frames_dir = os.path.join(project_folder, "frames")
-
-        if not os.path.isdir(native_frames_dir):
-            self.logger.debug(
-                "No native frames/ folder found at '%s'." % native_frames_dir
-            )
-            return []
-
-        found = []
-        for ext in FALLBACK_FRAME_EXTENSIONS:
-            found = sorted(
-                glob.glob(os.path.join(native_frames_dir, "*." + ext)),
-                key=self._native_frame_number,
-            )
-            if found:
-                break
-
-        if not found:
-            return []
-
-        self.logger.info(
-            "Recovered %d frame(s) from Harmony's native output folder '%s' — "
-            "copying to '%s'." % (len(found), native_frames_dir, output_dir)
-        )
-
-        ensure_folder_exists(output_dir)
-        recovered = []
-        for i, src in enumerate(found, start=1):
-            ext = os.path.splitext(src)[1]
-            dst = os.path.join(output_dir, "%s.%04d%s" % (base_name, i, ext))
-            shutil.copy2(src, dst)
-            recovered.append(dst)
-
-        return recovered

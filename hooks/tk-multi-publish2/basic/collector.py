@@ -113,6 +113,10 @@ class HarmonySessionCollector(HookBaseClass):
         # create an item for every camera node found live in the scene
         self.collect_harmony_cameras(settings, parent_item)
 
+        # create an item for every Write node found live in the scene, one
+        # render pass per node
+        self.collect_harmony_renders(settings, parent_item)
+
     def get_export_path(self, settings):
         publisher = self.parent
 
@@ -476,3 +480,66 @@ class HarmonySessionCollector(HookBaseClass):
             self.logger.info("Collected Harmony camera: %s" % camera_node)
 
         return camera_items
+
+    def collect_harmony_renders(self, settings, parent_item):
+        """
+        Creates one item per WRITE node found LIVE in the current scene —
+        multi-pass rework (see DEVELOPMENT_NOTES.txt): scenes now commonly
+        hold several Write nodes at once, one per compositing layer (e.g.
+        "Background", "Ship", "Characters"), each rendering its own image
+        sequence. Queries live via GET_NODES_OF_TYPE (same technique as
+        collect_harmony_cameras() — there's no on-disk equivalent of "the
+        scene's Write nodes").
+
+        Unlike Palette/Element (unchecked by default, since a scene
+        accumulates unused WIP scraps over its life), render passes are
+        core scene output — every item is checked by default. See
+        publish_render.py for how a pass's own node name becomes the
+        render templates' {name} key, and how exactly one pass (matching
+        the "Main Render Pass Name" plugin setting) additionally gets a
+        transcoded movie + ShotGrid Version.
+
+        :param parent_item: Parent Item instance
+        :returns: list of items of type harmony.render
+        """
+        engine = sgtk.platform.current_engine()
+
+        try:
+            write_nodes = engine.app.get_nodes_of_type(["WRITE"]) or []
+        except Exception as e:
+            self.logger.debug("Could not query WRITE nodes: %s" % e)
+            return []
+
+        if not write_nodes:
+            return []
+
+        icon_path = os.path.join(
+            self.disk_location, os.pardir, "icons", "publish.png"
+        )
+
+        if len(write_nodes) > 1:
+            renders_parent = parent_item.create_item(
+                "harmony.render_group", "Harmony Renders",
+                "Renders (double-click to expand)",
+            )
+            renders_parent.expanded = False
+            renders_parent.set_icon_from_path(icon_path)
+        else:
+            renders_parent = parent_item
+
+        render_items = []
+        for write_node in write_nodes:
+            pass_name_raw = write_node.rsplit("/", 1)[-1]
+
+            render_item = renders_parent.create_item(
+                "harmony.render", "Harmony Render", pass_name_raw
+            )
+            render_item.set_icon_from_path(icon_path)
+
+            render_item.properties["write_node"] = write_node
+            render_item.properties["pass_name_raw"] = pass_name_raw
+
+            render_items.append(render_item)
+            self.logger.info("Collected Harmony render pass: %s" % write_node)
+
+        return render_items

@@ -6,16 +6,25 @@
 # Source Code License included in this distribution package. See LICENSE.
 
 """
-Shared render-path-resolution logic used by both the "Render Current
-Version" standalone engine command (engine.py) and the Render publish
-plugin (hooks/tk-multi-publish2/basic/publish_render.py). Factored out so
-both share identical output_dir/base_name/leading_zeros computation instead
-of two copies drifting apart — see Session 13, DEVELOPMENT_NOTES.txt, for
-why the standalone command exists at all (in-publish render-completion
-detection has proven unreliable across Harmony versions).
+Shared render-path-resolution logic used by both the "Update Render Nodes"
+standalone engine command (engine.py) and the Render publish plugin
+(hooks/tk-multi-publish2/basic/publish_render.py). Factored out so both share
+identical output_dir/base_name/leading_zeros computation instead of two
+copies drifting apart.
+
+Multi-pass rework (see DEVELOPMENT_NOTES.txt): a Harmony scene can now hold
+several WRITE nodes at once, one per compositing layer (e.g. "Background",
+"Ship", "Characters"), each rendering to its own Toolkit-computed path. A
+pass's name is taken directly from its Write node's own name in Harmony
+(the artist already names nodes meaningfully) and dropped straight into the
+render templates' existing {name} key — no separate tagging/metadata step
+needed. The old single-node resolve_render_paths() is gone; everything now
+goes through resolve_render_paths_for_pass(), even for a scene with exactly
+one Write node.
 """
 
 import os
+import re
 import glob
 
 
@@ -24,7 +33,7 @@ __contact__ = "https://www.linkedin.com/in/sleepdeprivedproductions/"
 
 
 # common frame image extensions to look for when locating already-rendered
-# frames (Write node output, or Harmony's own native output folder).
+# frames for a pass.
 FALLBACK_FRAME_EXTENSIONS = ("png", "tga", "tif", "tiff", "jpg")
 
 # {Shot}/{Asset} render templates are named identically apart from the
@@ -42,16 +51,61 @@ class RenderPathError(Exception):
     pass
 
 
-def resolve_render_paths(engine, image_format="PNG"):
+def sanitize_pass_name(raw_name):
     """
-    Resolves the current Harmony session to a Toolkit-computed render
-    output location, mirroring the Render publish plugin's validate()
-    logic exactly. Returns a dict with output_dir, base_name, video_path,
-    leading_zeros, sequence_template, movie_template, render_fields.
+    Strips a Write node's raw name down to alphanumeric-only, for use as
+    the render templates' {name} key value (filter_by: alphanumeric — same
+    constraint hit and fixed for the Palette/Element/Camera Data publishers).
+    Falls back to the literal "render" if nothing alphanumeric survives.
+    """
+    sanitized = re.sub(r"[^A-Za-z0-9]", "", raw_name or "")
+    return sanitized or "render"
+
+
+def discover_write_node_passes(engine):
+    """
+    Live-queries the current scene's WRITE nodes and derives each one's
+    pass name from its own node name (the last "/"-separated segment of its
+    full node path, e.g. "Top/Background" -> "Background") — same technique
+    already used by the Camera Data collector for camera node display names.
+
+    Returns a list of dicts: {"node": <full node path>, "pass_name_raw":
+    <node's own name>, "pass_name": <sanitized, template-safe name>}.
+    Returns an empty list if there are no Write nodes, or if the live query
+    fails for any reason (never raises — an empty scene/query failure just
+    means nothing to collect, not an error).
+    """
+    try:
+        write_nodes = engine.app.get_nodes_of_type(["WRITE"]) or []
+    except Exception as e:
+        engine.logger.debug("Could not query WRITE nodes: %s" % e)
+        return []
+
+    passes = []
+    for write_node in write_nodes:
+        pass_name_raw = write_node.rsplit("/", 1)[-1]
+        passes.append({
+            "node": write_node,
+            "pass_name_raw": pass_name_raw,
+            "pass_name": sanitize_pass_name(pass_name_raw),
+        })
+    return passes
+
+
+def resolve_render_paths_for_pass(engine, pass_name, image_format="PNG"):
+    """
+    Resolves the current Harmony session + a given render pass name to a
+    Toolkit-computed render output location, mirroring the Render publish
+    plugin's validate() logic exactly. Returns a dict with output_dir,
+    base_name, video_path, leading_zeros, sequence_template, movie_template,
+    render_fields.
+
+    pass_name should already be sanitized (see sanitize_pass_name) — it is
+    used verbatim as the {name} template key.
 
     Raises RenderPathError (message is artist-facing) if the session isn't
-    saved, the context's entity type has no configured render templates,
-    or the templates can't resolve against the current path.
+    saved, the context's entity type has no configured render templates, or
+    the templates can't resolve against the current path.
     """
     current_path = engine.app.get_current_project_path()
     if not current_path or current_path == "Unknown":
@@ -93,8 +147,7 @@ def resolve_render_paths(engine, image_format="PNG"):
 
     if "version" not in render_fields:
         render_fields["version"] = work_fields.get("version", 1)
-    if "name" not in render_fields:
-        render_fields["name"] = work_fields.get("name", "render")
+    render_fields["name"] = pass_name
 
     try:
         # SEQ is a formatting placeholder, not a real frame number — build

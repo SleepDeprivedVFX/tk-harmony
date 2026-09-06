@@ -43,8 +43,8 @@ settings.tk-multi-publish2.harmony.asset_step:
     settings:
         Render Sequence Template: harmony_asset_render_sequence
         Render Movie Template: harmony_asset_render_movie
+        Main Render Pass Name: Comp
         FFmpeg Path: ffmpeg
-        Image Format: PNG
   - name: Publish Harmony Template
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
     settings:
@@ -114,8 +114,8 @@ settings.tk-multi-publish2.harmony.shot_step:
     settings:
         Render Sequence Template: harmony_shot_render_sequence
         Render Movie Template: harmony_shot_render_movie
+        Main Render Pass Name: Comp
         FFmpeg Path: ffmpeg
-        Image Format: PNG
   - name: Publish Harmony Template
     hook: "{self}/publish_file.py:{engine}/tk-multi-publish2/basic/publish_template.py"
     settings:

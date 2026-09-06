@@ -1549,8 +1549,27 @@ function Engine()
         return true;
     };
 
-    self.configure_write_node = function(data)
+    self.update_render_nodes = function(data)
     {
+        // Multi-pass rework (see DEVELOPMENT_NOTES.txt): a scene can now
+        // hold several WRITE nodes at once, one per compositing layer
+        // (e.g. "Background", "Ship", "Characters"), each rendering to its
+        // own Toolkit-computed path. Python has already discovered every
+        // Write node live (GET_NODES_OF_TYPE) and resolved each pass's
+        // output_dir/base_name/leading_zeros from its own node name — this
+        // just applies them, one node at a time, in a single undo step.
+        //
+        // Deliberately does NOT trigger a render. The old "Render Current
+        // Version"/RENDER_SCENE render-trigger machinery (render.
+        // renderSceneAll + renderFinished/frameReady/setRenderDisplay/
+        // setWriteEnabled) never got a correctly-configured, correctly-
+        // connected Write node to actually execute across four sessions of
+        // trying and was retired entirely (Sessions 14-17,
+        // DEVELOPMENT_NOTES.txt). Confirmed-working workflow: run this
+        // command to point every Write node at the current version's path,
+        // render manually via Harmony's own native Render command, then
+        // Publish picks up the frames.
+        //
         // Confirmed live against Harmony 25.2 via node.getAttrList() dump:
         // DRAWING_NAME is a single attribute holding the full folder +
         // filename-prefix (e.g. ".../v003/$Scene."); Harmony appends
@@ -1560,148 +1579,48 @@ function Engine()
         // default (3) does not match Toolkit's SEQ key padding (4), and
         // publish_render.py's FFmpeg/PublishedFile registration both
         // hardcode 4-digit frame numbers.
-        var output_dir    = data.output_dir;
-        var base_name     = data.base_name;
-        var file_format   = data.file_format || "PNG";
-        var leading_zeros = data.leading_zeros || 4;
+        var requested = data.nodes || [];
+        var updated = [];
+        var failed = [];
 
-        var write_nodes = node.getNodes(["WRITE"]);
-        if (!write_nodes || write_nodes.length === 0)
+        scene.beginUndoRedoAccum("Update Render Nodes");
+        for (var i = 0; i < requested.length; i++)
         {
-            self.log_exception("CONFIGURE_WRITE_NODE: no WRITE node found in the scene.");
-            return false;
-        }
+            var entry         = requested[i];
+            var write_node    = entry.node;
+            var output_dir    = entry.output_dir;
+            var base_name     = entry.base_name;
+            var file_format   = entry.file_format || "PNG";
+            var leading_zeros = entry.leading_zeros || 4;
 
-        var write_node = write_nodes[0];
-        if (write_nodes.length > 1)
-        {
-            self.log_warning(
-                "CONFIGURE_WRITE_NODE: multiple WRITE nodes found, configuring "
-                + "only the first: " + write_node
-            );
-        }
+            try
+            {
+                node.setTextAttr(write_node, "DRAWING_TYPE", 1, file_format);
+                node.setTextAttr(write_node, "DRAWING_NAME", 1, output_dir + "/" + base_name + ".");
+                node.setTextAttr(write_node, "LEADING_ZEROS", 1, String(leading_zeros));
 
-        scene.beginUndoRedoAccum("Configure Write Node");
-        try
-        {
-            node.setTextAttr(write_node, "DRAWING_TYPE", 1, file_format);
-            node.setTextAttr(write_node, "DRAWING_NAME", 1, output_dir + "/" + base_name + ".");
-            node.setTextAttr(write_node, "LEADING_ZEROS", 1, String(leading_zeros));
-        }
-        catch(e)
-        {
-            scene.cancelUndoRedoAccum();
-            self.log_exception("CONFIGURE_WRITE_NODE failed: " + e);
-            return false;
+                // setTextAttr() does not throw when Harmony rejects a
+                // value it doesn't like (e.g. an invalid DRAWING_TYPE
+                // silently falls back to TGA) — read the attributes
+                // straight back so the log shows what Harmony actually
+                // stored, not just what we tried to set.
+                self.log_warning("DIAGNOSTIC UPDATE_RENDER_NODES readback for " + write_node
+                    + ": DRAWING_TYPE=" + node.getTextAttr(write_node, 1, "DRAWING_TYPE")
+                    + " DRAWING_NAME=" + node.getTextAttr(write_node, 1, "DRAWING_NAME")
+                    + " LEADING_ZEROS=" + node.getTextAttr(write_node, 1, "LEADING_ZEROS"));
+
+                updated.push(write_node);
+            }
+            catch(node_err)
+            {
+                self.log_exception("UPDATE_RENDER_NODES failed for " + write_node + ": " + node_err);
+                failed.push(write_node);
+            }
         }
         scene.endUndoRedoAccum();
 
-        // DIAGNOSTIC (temporary — remove once the render pipeline is
-        // confirmed working live): setTextAttr() does not throw when
-        // Harmony rejects a value it doesn't like (e.g. an invalid
-        // DRAWING_TYPE silently falls back to TGA) — read the attributes
-        // straight back so the log shows what Harmony actually stored,
-        // not just what we tried to set.
-        self.log_warning("DIAGNOSTIC CONFIGURE_WRITE_NODE readback: DRAWING_TYPE="
-            + node.getTextAttr(write_node, 1, "DRAWING_TYPE")
-            + " DRAWING_NAME=" + node.getTextAttr(write_node, 1, "DRAWING_NAME")
-            + " LEADING_ZEROS=" + node.getTextAttr(write_node, 1, "LEADING_ZEROS"));
-
-        return write_node;
+        return {"updated": updated, "failed": failed};
     };
-
-    // Shared by render_scene() (Publish2's fire-and-forget path) and
-    // render_current_version() (the standalone artist-triggered command) —
-    // both need the same "kick off render.renderSceneAll(), then wait for
-    // the real render.renderFinished signal instead of trusting either
-    // renderSceneAll()'s own return or the non-existent
-    // renderSceneAllWithCallback()" logic. See render_scene()'s own history
-    // (Session 13, DEVELOPMENT_NOTES.txt) for why this exists.
-    // on_complete(rendered_frames, elapsed_ms) fires once, after a genuine
-    // render.renderFinished. on_error(message) fires once instead if
-    // render.renderSceneAll() throws synchronously. Never both.
-    function _run_render_and_detect_completion(on_complete, on_error) {
-        var rendered_frames = 0;
-        var finished = false;
-        var render_start_ms = Date.now();
-
-        var on_frame_ready = function(frame, frameCel) {
-            rendered_frames += 1;
-        };
-
-        var on_render_finished = function() {
-            if (finished) {
-                return;
-            }
-            finished = true;
-            render.frameReady.disconnect(on_frame_ready);
-            render.renderFinished.disconnect(on_render_finished);
-            on_complete(rendered_frames, Date.now() - render_start_ms);
-        };
-
-        try {
-            // Every documented usage of renderSceneAll() sets a render
-            // display target first (e.g. Toon Boom's own scripting example:
-            // render.setRenderDisplay("Top/Display")) — this was missing
-            // here, and is the leading suspect for a full hang observed
-            // live (Session 14): renderSceneAll() called, then dead
-            // silence forever — no error, no frameReady, no renderFinished,
-            // no frames on disk after 2.5+ minutes. Without a render
-            // target, there may be nothing for the render to composite
-            // through at all. Find the scene's actual Display node
-            // dynamically instead of hardcoding Toon Boom's example name,
-            // which may not match this scene's — same approach already
-            // used for the Write node.
-            var display_nodes = node.getNodes(["DISPLAY"]);
-            if (display_nodes && display_nodes.length > 0) {
-                if (display_nodes.length > 1) {
-                    self.log_warning(
-                        "DIAGNOSTIC multiple DISPLAY nodes found, using "
-                        + "only the first: " + display_nodes[0]
-                    );
-                }
-                self.log_warning("DIAGNOSTIC render.setRenderDisplay(" + display_nodes[0] + ")");
-                render.setRenderDisplay(display_nodes[0]);
-            } else {
-                self.log_warning(
-                    "DIAGNOSTIC no DISPLAY node found in scene — skipping "
-                    + "setRenderDisplay; render may have no target."
-                );
-            }
-
-            // render class reference (pulled Session 13 for the
-            // renderFinished/frameReady signals) also documents
-            // setWriteEnabled(bool) — "Activate or deactivate write
-            // modules during rendering". Never called anywhere in this
-            // codebase before now. Confirmed live (Session 16): with only
-            // setRenderDisplay() added, a full genuine 127-frame render
-            // ran (real per-frame Composite/Display work, correct
-            // renderFinished/frameReady signal firing, ~6 real minutes)
-            // but produced zero output files, and the Write node's own
-            // "write" step never once appeared in Harmony's render log —
-            // only Composite/Display steps did — despite the Write node
-            // being confirmed correctly connected in the node graph.
-            // Write modules are evidently opt-in per render call.
-            self.log_warning("DIAGNOSTIC render.setWriteEnabled(true)");
-            render.setWriteEnabled(true);
-
-            render.frameReady.connect(on_frame_ready);
-            render.renderFinished.connect(on_render_finished);
-
-            render.renderSceneAll();
-        } catch (e) {
-            if (!finished) {
-                finished = true;
-                try {
-                    render.frameReady.disconnect(on_frame_ready);
-                    render.renderFinished.disconnect(on_render_finished);
-                } catch (disconnect_err) {
-                    // ignore — connect() may never have run
-                }
-                on_error(e.toString());
-            }
-        }
-    }
 
     self.show_harmony_message = function(data) {
         // Lightweight way for Python to surface an error to the artist
@@ -1715,178 +1634,6 @@ function Engine()
         // so it has no such risk.
         MessageBox.warning(data.message || "");
         return true;
-    };
-
-    self.render_current_version = function(data) {
-        // Standalone, artist-triggered render — completely separate from
-        // Publish2. No status file, no Python-side polling: Python resolves
-        // the Toolkit output path/format and fires this once
-        // (fire-and-forget, same as RENDER_SCENE), then this function
-        // reports success/failure directly to the artist via a native
-        // Harmony dialog once the real render.renderFinished signal fires.
-        // Exists because in-publish auto-render's completion detection has
-        // proven unreliable across Harmony versions (Sessions 9 and 13) —
-        // this gives artists a way to render and SEE it finish before ever
-        // touching Publish, so Publish's own job can shrink to "does a
-        // rendered sequence already exist for this version" (see
-        // publish_render.py's "Auto-Render if Missing" setting).
-        var output_dir    = data.output_dir;
-        var base_name     = data.base_name;
-        var file_format    = data.file_format || "PNG";
-        var leading_zeros  = data.leading_zeros || 4;
-
-        self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION received: output_dir="
-            + output_dir + " base_name=" + base_name);
-
-        singleShotTimer(0, function() {
-            try {
-                var write_node = self.configure_write_node({
-                    output_dir: output_dir,
-                    base_name: base_name,
-                    file_format: file_format,
-                    leading_zeros: leading_zeros
-                });
-                if (!write_node) {
-                    MessageBox.warning(
-                        "Render failed: could not configure the Write node — "
-                        + "see Harmony's Message Log for details."
-                    );
-                    return;
-                }
-
-                self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION calling "
-                    + "render.renderSceneAll() (async — waiting for "
-                    + "render.renderFinished signal)...");
-
-                _run_render_and_detect_completion(
-                    function(rendered_frames, elapsed_ms) {
-                        self.log_warning("DIAGNOSTIC RENDER_CURRENT_VERSION "
-                            + "render.renderFinished fired after " + elapsed_ms
-                            + " ms; frameReady fired " + rendered_frames + " time(s).");
-                        MessageBox.information(
-                            "Render complete: " + rendered_frames
-                            + " frame(s) rendered to:\n" + output_dir
-                        );
-                    },
-                    function(error_msg) {
-                        self.log_exception("RENDER_CURRENT_VERSION failed: " + error_msg);
-                        MessageBox.warning("Render failed: " + error_msg);
-                    }
-                );
-            } catch (e) {
-                self.log_exception("RENDER_CURRENT_VERSION failed: " + e);
-                MessageBox.warning("Render failed: " + e.toString());
-            }
-        });
-
-        return true;  // Immediate acknowledgement — render happens asynchronously
-    };
-
-    self.render_scene = function(data) {
-        var start_frame  = data.start_frame;
-        var stop_frame   = data.stop_frame;
-        var status_path  = data.status_path;  // path Python will poll for completion
-        var expected_frame_count = stop_frame - start_frame + 1;
-        var status_written = false;  // guard against writing the status file twice
-
-        // DIAGNOSTIC (temporary — remove once the render pipeline is
-        // confirmed working live): WARNING level so it's guaranteed to hit
-        // the log regardless of debug settings, same approach that found
-        // the readyRead/deadlock bugs in Session 2.
-        self.log_warning("DIAGNOSTIC RENDER_SCENE received: start=" + start_frame
-            + " stop=" + stop_frame + " status_path=" + status_path);
-
-        function write_status(success, rendered_frames, error_msg) {
-            if (status_written) {
-                return;
-            }
-            status_written = true;
-
-            self.log_warning("DIAGNOSTIC RENDER_SCENE writing status file: success=" + success
-                + " rendered_frames=" + rendered_frames + " error=" + error_msg);
-
-            var status = {
-                "success": success,
-                "rendered_frames": rendered_frames,
-                "error": error_msg
-            };
-
-            try {
-                var qfile = new QFile(status_path);
-                if (qfile.open(QIODevice.WriteOnly | QIODevice.Text)) {
-                    var stream = new QTextStream(qfile);
-                    stream.writeString(JSON.stringify(status));
-                    qfile.close();
-                    self.log_warning("DIAGNOSTIC RENDER_SCENE status file written OK.");
-                } else {
-                    self.log_exception("RENDER_SCENE: could not open status file for writing: " + status_path);
-                }
-            } catch(write_err) {
-                self.log_exception("RENDER_SCENE: could not write status file: " + write_err);
-            }
-        }
-
-        // Defer the render so the socket can process the incoming message first
-        singleShotTimer(0, function() {
-            self.log_warning("DIAGNOSTIC RENDER_SCENE deferred callback fired.");
-
-            try {
-                // Previously start_frame/stop_frame were only used to
-                // estimate rendered_frames below — never actually applied
-                // to the scene, so renderSceneAll()/renderSceneAllWithCallback()
-                // always rendered whatever the scene's own Start/Stop frame
-                // settings happened to be, regardless of what Toolkit asked
-                // for. Now explicitly set, same call SET_START_FRAME/
-                // SET_STOP_FRAME already use.
-                scene.beginUndoRedoAccum("Render Scene - Set Frame Range");
-                scene.setStartFrame(start_frame);
-                scene.setStopFrame(stop_frame);
-                scene.endUndoRedoAccum();
-
-                self.log_warning("DIAGNOSTIC RENDER_SCENE frame range set, scene now reports: "
-                    + scene.getStartFrame() + "-" + scene.getStopFrame());
-
-                // Confirmed broken live on Harmony 25.2: render.setRenderMode
-                // is not a function in this JS engine at all (unlike the
-                // singleShotTimer case, there's no evidence for a property-
-                // style alternative, and this is a quality/speed knob, not
-                // something the render actually depends on) — skip
-                // gracefully rather than guess another name blind.
-                if (typeof render.setRenderMode === "function" && typeof render.DRAFT !== "undefined") {
-                    render.setRenderMode(render.DRAFT);
-                } else {
-                    self.log_warning("DIAGNOSTIC render.setRenderMode/DRAFT not available in this Harmony version — skipping, rendering at default quality.");
-                }
-
-                // render.renderSceneAllWithCallback() DOES NOT EXIST — confirmed
-                // against Toon Boom's own Harmony 25.2 scripting reference
-                // (classrender.html). The correct, documented way to detect
-                // real completion is the render.renderFinished Qt-style
-                // signal (render.frameReady fires per frame before it) — see
-                // _run_render_and_detect_completion() above, shared with
-                // render_current_version().
-                self.log_warning("DIAGNOSTIC calling render.renderSceneAll() (async — waiting for "
-                    + "render.renderFinished signal)...");
-
-                _run_render_and_detect_completion(
-                    function(rendered_frames, elapsed_ms) {
-                        self.log_warning("DIAGNOSTIC render.renderFinished fired after "
-                            + elapsed_ms + " ms; frameReady fired " + rendered_frames
-                            + " time(s) (expected " + expected_frame_count + ").");
-                        write_status(true, rendered_frames, "");
-                    },
-                    function(error_msg) {
-                        self.log_exception("RENDER_SCENE failed: " + error_msg);
-                        write_status(false, 0, error_msg);
-                    }
-                );
-            } catch(e) {
-                self.log_exception("RENDER_SCENE failed: " + e);
-                write_status(false, 0, e.toString());
-            }
-        });
-
-        return true;  // Immediate acknowledgement — render happens asynchronously
     };
 
     self.export_camera_data = function(data)
@@ -2073,9 +1820,7 @@ function Engine()
         self.registerCallback("SET_NODE_METADATA",   self.set_node_metadata);
 
         // Render
-        self.registerCallback("CONFIGURE_WRITE_NODE", self.configure_write_node);
-        self.registerCallback("RENDER_SCENE", self.render_scene);
-        self.registerCallback("RENDER_CURRENT_VERSION", self.render_current_version);
+        self.registerCallback("UPDATE_RENDER_NODES", self.update_render_nodes);
         self.registerCallback("SHOW_HARMONY_MESSAGE", self.show_harmony_message);
 
         // Camera / scene data export
