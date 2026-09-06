@@ -324,7 +324,10 @@ class HarmonyEngine(Engine):
         passes = render_utils.discover_write_node_passes(self)
         if not passes:
             self.logger.warning("Update Render Nodes: no Write nodes found in the scene.")
-            self.app.show_harmony_message("No Write nodes found in the current scene.")
+            self.app.show_harmony_message(
+                "No Write nodes found in the current scene.",
+                level="warning", title="Update Render Nodes",
+            )
             return
 
         nodes = []
@@ -368,7 +371,11 @@ class HarmonyEngine(Engine):
             message_lines.extend("  " + n for n in failed)
 
         self.logger.info("Update Render Nodes: %s" % "; ".join(message_lines))
-        self.app.show_harmony_message("\n".join(message_lines) or "Nothing to update.")
+        self.app.show_harmony_message(
+            "\n".join(message_lines) or "Nothing to update.",
+            level="warning" if failed else "info",
+            title="Update Render Nodes",
+        )
 
     def reload_command(self, *args, **kwargs):
         """

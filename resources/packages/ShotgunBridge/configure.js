@@ -1623,7 +1623,7 @@ function Engine()
     };
 
     self.show_harmony_message = function(data) {
-        // Lightweight way for Python to surface an error to the artist
+        // Lightweight way for Python to surface a message to the artist
         // without going through engine.py's show_message()/show_error()
         // (those use QMessageBox.exec_(), a nested modal loop — this
         // engine runs as a detached background process that Windows won't
@@ -1632,7 +1632,23 @@ function Engine()
         // MenuGenerator.show()'s popup()-not-exec_() fix for the same
         // issue). MessageBox here runs in Harmony's own focused process,
         // so it has no such risk.
-        MessageBox.warning(data.message || "");
+        //
+        // level defaults to "warning" for backward compatibility (every
+        // caller before "Update Render Nodes" was reporting a failure).
+        // Explicit button args (0, 0, 0) are passed for BOTH information
+        // and warning so this always gets a plain OK button — without
+        // them, MessageBox.warning()'s own default button set is
+        // Retry/Abort, which reads as an active error prompt even when
+        // used to report a clean success (confirmed live: confusing an
+        // artist on a successful "Update Render Nodes" run).
+        var level = data.level || "warning";
+        var title = data.title || "ShotGrid Harmony Engine";
+
+        if (level === "info") {
+            MessageBox.information(data.message || "", 0, 0, 0, title);
+        } else {
+            MessageBox.warning(data.message || "", 0, 0, 0, title);
+        }
         return true;
     };
 

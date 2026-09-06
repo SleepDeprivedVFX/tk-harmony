@@ -489,16 +489,23 @@ class Application(QTcpSocketClient):
             entry["output_dir"] = entry["output_dir"].replace("\\", "/")
         return self.send_and_receive_command("UPDATE_RENDER_NODES", nodes=nodes)
 
-    def show_harmony_message(self, message):
+    def show_harmony_message(self, message, level="warning", title=None):
         """
-        Shows a warning dialog inside Harmony's own (focused) process.
-        Deliberately NOT using engine.show_error()/show_message() — those
-        call QMessageBox.exec_(), which nests a modal event loop this
-        detached background process's window can never receive focus to
-        dismiss (same class of bug already fixed for the Shotgun menu
-        itself in menu_generation.py). Fire-and-forget; nothing to wait for.
+        Shows a dialog inside Harmony's own (focused) process. level is
+        "info" for a clean success (plain information icon/OK button) or
+        "warning" (default, for backward compatibility) for anything the
+        artist should treat as not-quite-right — never conflate the two,
+        confirmed live that a success reported via the warning icon reads
+        as an error. Deliberately NOT using engine.show_error()/
+        show_message() — those call QMessageBox.exec_(), which nests a
+        modal event loop this detached background process's window can
+        never receive focus to dismiss (same class of bug already fixed
+        for the Shotgun menu itself in menu_generation.py). Fire-and-
+        forget; nothing to wait for.
         """
-        self.send_command("SHOW_HARMONY_MESSAGE", message=message)
+        self.send_command(
+            "SHOW_HARMONY_MESSAGE", message=message, level=level, title=title
+        )
 
     def export_camera_data(self, camera_node, start_frame, stop_frame):
         """
