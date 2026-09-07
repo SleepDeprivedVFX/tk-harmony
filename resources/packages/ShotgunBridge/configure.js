@@ -1590,7 +1590,7 @@ function Engine()
             var write_node    = entry.node;
             var output_dir    = entry.output_dir;
             var base_name     = entry.base_name;
-            var file_format   = entry.file_format || "PNG";
+            var file_format   = entry.file_format || "PNG4"; // PNG4 = Color + Alpha (RGBA); plain PNG is Color-only (RGB)
             var leading_zeros = entry.leading_zeros || 4;
 
             try

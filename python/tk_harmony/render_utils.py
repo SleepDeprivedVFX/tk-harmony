@@ -92,13 +92,21 @@ def discover_write_node_passes(engine):
     return passes
 
 
-def resolve_render_paths_for_pass(engine, pass_name, image_format="PNG"):
+def resolve_render_paths_for_pass(engine, pass_name, image_format="PNG4"):
     """
     Resolves the current Harmony session + a given render pass name to a
     Toolkit-computed render output location, mirroring the Render publish
     plugin's validate() logic exactly. Returns a dict with output_dir,
     base_name, video_path, leading_zeros, sequence_template, movie_template,
     render_fields.
+
+    image_format is a Harmony WRITE-node DRAWING_TYPE code, only consumed by
+    "Update Render Nodes" (engine.py) to configure the node's output format —
+    publish_render.py never sets Write node attributes, so this value is
+    unused there. "PNG4" is Harmony's code for 4-channel PNG (Color + Alpha,
+    RGBA); plain "PNG" is 3-channel (Color, RGB only). FFmpeg's h264 movie
+    transcode (publish_render.py) has no alpha channel regardless, so this
+    only affects the published PNG sequence, not the review movie.
 
     pass_name should already be sanitized (see sanitize_pass_name) — it is
     used verbatim as the {name} template key.
