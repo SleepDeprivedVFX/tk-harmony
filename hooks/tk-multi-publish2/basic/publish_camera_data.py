@@ -11,6 +11,7 @@
 import os
 import re
 import json
+import math
 
 import sgtk
 from sgtk.util.filesystem import ensure_folder_exists
@@ -21,20 +22,25 @@ HookBaseClass = sgtk.get_hook_baseclass()
 
 class HarmonyCameraDataPublishPlugin(HookBaseClass):
     """
-    Plugin for publishing a Harmony camera's transform data.
+    Plugin for publishing the scene's default camera's transform data.
 
-    Exports two files per camera: a JSON file (source of truth — full
-    per-frame camera + driving-Peg transform data, exactly what Harmony
-    reported) and a Nuke .chan file (frame tx ty tz rx ry rz per line,
-    Nuke's own native Camera > Import chan file format — no plugin needed
-    on the Nuke side).
+    Exports two files: a JSON file (source of truth — full per-frame camera
+    transform data plus scene/lens metadata that a .chan file has no room
+    for) and a Nuke .chan file (frame tx ty tz rx ry rz per line, Nuke's own
+    native Camera > Import chan file format — no plugin needed on the Nuke
+    side).
 
-    NOT LIVE-VERIFIED: this is the first pass at Harmony camera data in
-    this codebase. The .chan conversion in particular is a first-pass
-    approximation — Harmony's camera model is 2.5D (single Z-axis
-    rotation), so only rz is populated; rx/ry are always 0. Expect this
-    to need at least one iteration once tested against a real Nuke comp,
-    same as the render pipeline's Write node redirect did.
+    Scoped to the scene's current DEFAULT camera only (Scene > Camera):
+    Harmony's scene.getCameraMatrix() — used to read the fully-composited
+    transform, any driving Peg already baked in — can only read the current
+    default camera, not an arbitrary camera node. Multi-camera scenes would
+    need temporarily switching the default camera at publish time; deferred
+    for now.
+
+    Ported from Toon Boom's own TB_ExportCamera.js (matrix.extract*() calls,
+    default-camera resolution, FOV/focal-length reporting, scale-varies
+    detection) rather than the earlier guessed-attribute-name approach this
+    plugin originally shipped with.
     """
 
     @property
@@ -58,16 +64,16 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
         contain simple html for formatting.
         """
         return """
-        Exports a Harmony camera's transform animation as a JSON file
-        (source of truth) and a Nuke .chan file (importable directly via
-        Nuke's Camera > Import chan file, no plugin required).<br><br>
+        Exports the scene's default camera's transform animation as a JSON
+        file (source of truth, including scene/lens metadata) and a Nuke
+        .chan file (importable directly via Nuke's Camera > Import chan
+        file, no plugin required).<br><br>
 
-        <b>First pass, not yet validated against a real comp</b> &mdash;
-        Harmony's camera data model hasn't been exercised in this pipeline
-        before. The .chan file only populates Z-axis rotation (rx/ry are
-        always 0), and the underlying attribute names are unconfirmed for
-        this Harmony version. Maya (FBX) and After Effects export are not
-        yet supported.
+        Scoped to the scene's current default camera (Scene &gt; Camera)
+        only. If the camera's zoom is animated via SCALE rather than a
+        Z-truck, that motion is NOT captured by the .chan file &mdash; check
+        the JSON's <code>scene_info.scale_varies</code> flag and the
+        publish log for a warning.
         """
 
     @property
@@ -97,6 +103,58 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
                 ".chan file. Should correspond to a template "
                 "defined in templates.yml (e.g. "
                 "harmony_asset_camera_data_chan).",
+            },
+            "Unit Scale": {
+                "type": "float",
+                "default": 1.0,
+                "description": "Multiplier applied to Harmony's position "
+                "units when writing the .chan file (Harmony field units "
+                "-> Nuke world units).",
+            },
+            "Flip X": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the X axis when writing the .chan file.",
+            },
+            "Flip Y": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the Y axis when writing the .chan file.",
+            },
+            "Flip Z": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the Z axis when writing the .chan file "
+                "(try this first if depth/parallax reads inverted in Nuke).",
+            },
+            "Flip Rotation X": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the X rotation when writing the .chan file.",
+            },
+            "Flip Rotation Y": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the Y rotation when writing the .chan file.",
+            },
+            "Flip Rotation Z": {
+                "type": "bool",
+                "default": False,
+                "description": "Invert the Z rotation when writing the .chan file.",
+            },
+            "Rotation Is Radians": {
+                "type": "bool",
+                "default": False,
+                "description": "Set True ONLY if rotations come out tiny "
+                "(~0.01 instead of ~degrees) on retest, meaning "
+                "matrix.extractRotation() returned radians on this build.",
+            },
+            "Nuke Horizontal Aperture (mm)": {
+                "type": "float",
+                "default": 24.576,
+                "description": "Nuke camera horizontal aperture used to "
+                "compute a suggested focal length from Harmony's FOV. Set "
+                "to match the plate's camera in Nuke.",
             },
         }
 
@@ -153,7 +211,28 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
         Validates the given item to check that it is ok to publish.
         """
         engine = sgtk.platform.current_engine()
-        camera_node = item.properties["camera_node"]
+
+        # Re-resolve the default camera now, rather than trusting the item
+        # property from collection time — the artist may have changed the
+        # scene's default camera (Scene > Camera) in between. Using the
+        # freshly-resolved node keeps the computed name/paths below
+        # consistent with what will actually be exported at publish time.
+        default_camera = engine.app.get_default_camera()
+        if not default_camera or not default_camera.get("success"):
+            raise Exception(
+                "No default camera found in the scene (%s). Set one via "
+                "Scene > Camera before publishing camera data."
+                % (default_camera.get("error") if default_camera else "no response")
+            )
+
+        camera_node = default_camera["camera_node"]
+        if camera_node != item.properties.get("camera_node"):
+            self.logger.warning(
+                "Scene's default camera changed since collection (was '%s', "
+                "now '%s') — publishing the current default camera."
+                % (item.properties.get("camera_node"), camera_node)
+            )
+        item.properties["camera_node"] = camera_node
 
         frame_range = engine.app.get_frame_range()
         start_frame = int(frame_range.get("start_frame", 1))
@@ -198,7 +277,6 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
         """
         Executes the publish logic for the given item and settings.
         """
-        publisher = self.parent
         engine = sgtk.platform.current_engine()
         context = item.context
 
@@ -215,28 +293,70 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
         )
         if not camera_data or not camera_data.get("success") or not camera_data.get("frames"):
             raise Exception(
-                "EXPORT_CAMERA_DATA returned no usable data for '%s' — "
-                "aborting instead of publishing an empty/bogus file. "
-                "Check Harmony's Message Log for the DIAGNOSTIC attribute "
-                "dump and the underlying error." % camera_node
+                "EXPORT_CAMERA_DATA returned no usable data for '%s': %s — "
+                "aborting instead of publishing an empty/bogus file."
+                % (
+                    camera_node,
+                    camera_data.get("error") if camera_data else "no response",
+                )
+            )
+
+        scene_info = camera_data.get("scene_info", {}) or {}
+        haperture_mm = settings.get("Nuke Horizontal Aperture (mm)").value
+        fov_deg = scene_info.get("fov_deg")
+        suggested_focal_mm = None
+        if fov_deg:
+            suggested_focal_mm = haperture_mm / (
+                2.0 * math.tan(math.radians(fov_deg) / 2.0)
+            )
+        scene_info["nuke_haperture_mm"] = haperture_mm
+        scene_info["suggested_focal_mm"] = suggested_focal_mm
+
+        if scene_info.get("scale_varies"):
+            self.logger.warning(
+                "Camera SCALE animates in this scene — that is usually a "
+                "zoom done by scaling the camera rather than trucking in Z, "
+                "and it is NOT captured by the .chan file's translate/"
+                "rotate channels. It must become animated focal length in "
+                "Nuke instead. See scene_info.scale_varies in the published "
+                "JSON."
             )
 
         ensure_folder_exists(os.path.dirname(json_path))
         ensure_folder_exists(os.path.dirname(chan_path))
 
+        json_payload = {
+            "camera_node": camera_data["camera_node"],
+            "publish_name": publish_name,
+            "version": version,
+            "start_frame": start_frame,
+            "stop_frame": stop_frame,
+            "scene_info": scene_info,
+            "frames": camera_data["frames"],
+        }
         with open(json_path, "w") as fh:
-            json.dump(camera_data, fh, indent=2)
+            json.dump(json_payload, fh, indent=2)
         self.logger.info("Wrote camera data JSON: %s" % json_path)
 
-        self._write_chan_file(chan_path, camera_data["frames"])
+        self._write_chan_file(chan_path, camera_data["frames"], settings)
         self.logger.info("Wrote Nuke .chan file: %s" % chan_path)
 
+        # Registered under a separate published_file_type AND a distinct SG
+        # "name" from the .chan (below). Loader2's "latest publish" browse
+        # view groups/collapses publishes by (entity, name) alone, ignoring
+        # published_file_type entirely — sharing publish_name with the .chan
+        # (even under a different type) caused the two to collapse into a
+        # single ambiguous tile with no working actions, confirmed live
+        # (Session 20). The on-disk path/version stay siblings (same
+        # {name}/{version} template fields as the .chan) so the Nuke-side
+        # sibling-JSON lookup by extension-swap still works — only this SG
+        # display name differs.
         json_publish_data = sgtk.util.register_publish(
             engine.sgtk,
             context,
             json_path,
-            publish_name,
-            published_file_type="Harmony Camera Data",
+            "%s Metadata" % publish_name,
+            published_file_type="Harmony Camera Metadata",
             version_number=version,
             comment=item.description,
         )
@@ -268,28 +388,45 @@ class HarmonyCameraDataPublishPlugin(HookBaseClass):
         """
         pass
 
-    def _write_chan_file(self, chan_path, frames):
+    def _write_chan_file(self, chan_path, frames, settings):
         """
         Converts exported camera frame data to Nuke's .chan format: one
-        line per frame, "frame tx ty tz rx ry rz". First-pass mapping —
-        Harmony's camera is 2.5D (a single Z-axis rotation, "angle"), so
-        rx/ry are always 0 here; expect this to need real-world validation
-        against an actual Nuke comp.
+        line per frame, "frame tx ty tz rx ry rz". Axis-flip/unit-scale
+        tunables are plugin settings (rather than hardcoded, as they were
+        in the original TB_ExportCamera.js) so a TD can adjust Harmony ->
+        Nuke coordinate conventions without touching JS. Defaults (no
+        flips, unit scale 1.0) match that script's own defaults.
         """
+        unit_scale = settings.get("Unit Scale").value
+        flip_x = -1.0 if settings.get("Flip X").value else 1.0
+        flip_y = -1.0 if settings.get("Flip Y").value else 1.0
+        flip_z = -1.0 if settings.get("Flip Z").value else 1.0
+        flip_rx = -1.0 if settings.get("Flip Rotation X").value else 1.0
+        flip_ry = -1.0 if settings.get("Flip Rotation Y").value else 1.0
+        flip_rz = -1.0 if settings.get("Flip Rotation Z").value else 1.0
+        rotation_is_radians = settings.get("Rotation Is Radians").value
+        rad_to_deg = 180.0 / math.pi
+
         lines = []
         for record in frames:
-            camera = record["camera"]
+            p = record["position"]
+            r = record["rotation"]
+
+            tx = p["x"] * unit_scale * flip_x
+            ty = p["y"] * unit_scale * flip_y
+            tz = p["z"] * unit_scale * flip_z
+
+            rx = r["x"] * flip_rx
+            ry = r["y"] * flip_ry
+            rz = r["z"] * flip_rz
+            if rotation_is_radians:
+                rx *= rad_to_deg
+                ry *= rad_to_deg
+                rz *= rad_to_deg
+
             lines.append(
-                "%d %f %f %f %f %f %f"
-                % (
-                    record["frame"],
-                    camera["x"],
-                    camera["y"],
-                    camera["z"],
-                    0.0,
-                    0.0,
-                    camera["angle"],
-                )
+                "%d %.6f %.6f %.6f %.6f %.6f %.6f"
+                % (record["frame"], tx, ty, tz, rx, ry, rz)
             )
 
         with open(chan_path, "w") as fh:

@@ -417,69 +417,54 @@ class HarmonySessionCollector(HookBaseClass):
 
     def collect_harmony_cameras(self, settings, parent_item):
         """
-        Creates one item per camera node found LIVE in the current scene
-        (unlike the palette/element collectors, this queries Harmony
-        directly rather than scanning disk — there's no on-disk
-        equivalent of "the scene's cameras").
+        Creates a single item for the scene's current DEFAULT camera (Scene
+        > Camera), found LIVE via engine.app.get_default_camera() (unlike
+        the palette/element collectors, this queries Harmony directly —
+        there's no on-disk equivalent of "the scene's camera").
 
-        Uses the existing generic GET_NODES_OF_TYPE RPC
-        (engine.app.get_nodes_of_type) with node type "CAMERA" — NOT
-        LIVE-VERIFIED that this is the correct Harmony node-type string
-        for this version; if it isn't, this call safely returns an empty
-        list rather than erroring, so an unconfirmed guess here can't
-        break collection of anything else.
-
-        Unlike palettes/elements (where a scene often has several stale
-        ones and nothing should auto-publish), a scene's camera count is
-        usually exactly one and there's no "which one" ambiguity, so a
-        single camera is collected directly under the session rather than
-        wrapped in a redundant single-item group; multiple cameras (rare)
-        still get grouped, matching the standing convention.
+        Scoped to the default camera only: scene.getCameraMatrix(), used at
+        publish time to read the camera's fully-composited transform, can
+        only read the CURRENT default camera — there is no Harmony API to
+        query an arbitrary camera node's world matrix directly. Supporting
+        other cameras in a multi-camera scene would need temporarily
+        switching the default camera at publish time and is deferred.
 
         :param parent_item: Parent Item instance
-        :returns: list of items of type harmony.camera_data
+        :returns: list of items of type harmony.camera_data (0 or 1 items)
         """
         engine = sgtk.platform.current_engine()
 
         try:
-            camera_nodes = engine.app.get_nodes_of_type(["CAMERA"]) or []
+            result = engine.app.get_default_camera()
         except Exception as e:
-            self.logger.debug("Could not query camera nodes: %s" % e)
+            self.logger.debug("Could not query default camera: %s" % e)
             return []
 
-        if not camera_nodes:
+        if not result or not result.get("success"):
+            self.logger.debug(
+                "No default camera found: %s"
+                % (result.get("error") if result else "no response")
+            )
             return []
+
+        camera_node = result["camera_node"]
+        display_name = result.get("camera_name") or camera_node.rsplit("/", 1)[-1]
 
         icon_path = os.path.join(
             self.disk_location, os.pardir, "icons", "publish.png"
         )
 
-        if len(camera_nodes) > 1:
-            cameras_parent = parent_item.create_item(
-                "harmony.camera_data_group", "Harmony Camera Data",
-                "Camera Data (double-click to expand)",
-            )
-            cameras_parent.expanded = False
-            cameras_parent.set_icon_from_path(icon_path)
-        else:
-            cameras_parent = parent_item
+        camera_item = parent_item.create_item(
+            "harmony.camera_data", "Harmony Camera Data", display_name
+        )
+        camera_item.set_icon_from_path(icon_path)
 
-        camera_items = []
-        for camera_node in camera_nodes:
-            display_name = camera_node.rsplit("/", 1)[-1]
+        camera_item.properties["camera_node"] = camera_node
+        camera_item.properties["publish_type"] = CAMERA_DATA_PUBLISHED_TYPE
 
-            camera_item = cameras_parent.create_item(
-                "harmony.camera_data", "Harmony Camera Data", display_name
-            )
-            camera_item.set_icon_from_path(icon_path)
+        self.logger.info("Collected Harmony default camera: %s" % camera_node)
 
-            camera_item.properties["camera_node"] = camera_node
-            camera_item.properties["publish_type"] = CAMERA_DATA_PUBLISHED_TYPE
-
-            camera_items.append(camera_item)
-            self.logger.info("Collected Harmony camera: %s" % camera_node)
-
-        return camera_items
+        return [camera_item]
 
     def collect_harmony_renders(self, settings, parent_item):
         """

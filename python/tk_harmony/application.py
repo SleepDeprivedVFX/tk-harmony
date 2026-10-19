@@ -440,6 +440,17 @@ class Application(QTcpSocketClient):
         result = self.send_and_receive_command("GET_NODES_OF_TYPE", node_types=node_types)
         return result
 
+    def get_default_camera(self):
+        """
+        Resolves the scene's current default camera (Scene > Camera), the
+        same node scene.getCameraMatrix() reads at render/export time —
+        there is no way to ask Harmony for another camera's matrix
+        directly. See configure.js's get_default_camera() for the
+        top-level/selection fallback logic (ported from Toon Boom's own
+        TB_ExportCamera.js).
+        """
+        return self.send_and_receive_command("GET_DEFAULT_CAMERA")
+
     def get_node_metadata(self, node, attr_name):
         result = self.send_and_receive_command(
             "GET_NODE_METADATA", node=node, attr_name=attr_name

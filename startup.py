@@ -129,6 +129,13 @@ class HarmonyLauncher(SoftwareLauncher):
     # template, therefore the duplication of regex components:
     COMPONENT_REGEX_LOOKUP = {
         "version": r"\d\d\.*\d*",
+        # Mac app bundle (and, assumed pending confirmation, its Contents/MacOS
+        # executable) repeat the version inside the .app name itself, e.g.
+        # ".../Toon Boom Harmony 25.2 Premium/Harmony  25.2 Premium.app" — a
+        # field can't be reused twice in one template (duplicate regex group
+        # names), hence version2/version3 as plain duplicates of "version".
+        "version2": r"\d\d\.*\d*",
+        "version3": r"\d\d\.*\d*",
         "platform": r" \(x86\)",
         "edition00": r"\w+",
         "edition01": r"\w+",
@@ -154,8 +161,18 @@ class HarmonyLauncher(SoftwareLauncher):
             "/opt/{company00}Animation/{product00}{edition00}_{version}/lnx86_64/bin/{product01}{edition01}",
         ],
         "darwin": [
-            "/Applications/{company00} {product00} {version} {edition00}/{product01} {edition01}.app/Contents/MacOS/{product02} {edition02}",
-            "/Applications/{company00} {product00} {version} {edition00}/{product01} {edition01}.app/Contents/tba/macosx/bin/{product02} {edition02}",
+            # Confirmed real-world layout (2026-10-11, Adam, Harmony 25.2
+            # Premium on Mac): the outer folder is
+            # "Toon Boom Harmony 25.2 Premium", but the .app bundle itself is
+            # "Harmony  25.2 Premium.app" — note the version repeated inside
+            # the bundle name, AND a double space between "Harmony" and the
+            # version (taken literally as reported; not yet re-confirmed
+            # character-for-character on the actual Mac). The Contents/MacOS
+            # executable's exact filename is NOT yet confirmed — this assumes
+            # it mirrors the bundle name (common for unmodified Mac installers)
+            # pending an `ls` of Contents/MacOS/ on the real machine.
+            "/Applications/{company00} {product00} {version} {edition00}/{product01}  {version2} {edition01}.app/Contents/MacOS/{product02}  {version3} {edition02}",
+            "/Applications/{company00} {product00} {version} {edition00}/{product01}  {version2} {edition01}.app/Contents/tba/macosx/bin/{product02}  {version3} {edition02}",
         ],
     }
 

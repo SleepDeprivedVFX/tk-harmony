@@ -1652,72 +1652,134 @@ function Engine()
         return true;
     };
 
+    self.get_default_camera = function(data)
+    {
+        // Ported from Toon Boom's own TB_ExportCamera.js: node.getDefaultCamera()
+        // gives the camera NAME set via Scene > Camera, not a full node path.
+        // It's normally at the top level ("Top/<name>"), but if it has been
+        // moved/grouped, fall back to checking the current selection for a
+        // CAMERA node with that name (same fallback the original script uses).
+        try
+        {
+            var camName = node.getDefaultCamera();
+            if (!camName)
+            {
+                return { "success": false,
+                    "error": "No default camera set. Use Scene > Camera to set one." };
+            }
+
+            var camPath = "Top/" + camName;
+            if (node.type(camPath) != "CAMERA")
+            {
+                var found = null;
+                var n = selection.numberOfNodesSelected();
+                for (var s = 0; s < n; ++s)
+                {
+                    var name = selection.selectedNode(s);
+                    if (node.type(name) == "CAMERA" && node.getName(name) == camName)
+                    {
+                        found = name;
+                        break;
+                    }
+                }
+                if (found === null)
+                {
+                    return { "success": false,
+                        "error": "Default camera '" + camName + "' is not in the "
+                            + "top-level group. Select it in the Timeline or Node "
+                            + "view and try again." };
+                }
+                camPath = found;
+            }
+
+            return { "success": true, "camera_node": camPath, "camera_name": camName };
+        }
+        catch(e)
+        {
+            self.log_exception("GET_DEFAULT_CAMERA failed: " + e);
+            return { "success": false, "error": e.toString() };
+        }
+    };
+
     self.export_camera_data = function(data)
     {
-        // NOT LIVE-VERIFIED. Nothing in this codebase has touched a
-        // Camera/Peg node before this — the attribute names below
-        // (POSITION.X/Y/Z, SCALE.X/Y, ANGLE) are standard Toon Boom
-        // Harmony scripting conventions but are UNCONFIRMED against this
-        // studio's actual Harmony version. A raw node.getAttrList() dump
-        // is logged below (same technique that found the real Write node
-        // attributes in an earlier session) specifically so a wrong guess
-        // here is easy to correct from the Message Log rather than
-        // silently producing bogus data.
-        var camera_node  = data.camera_node;
-        var start_frame  = data.start_frame;
-        var stop_frame   = data.stop_frame;
+        // Uses scene.getCameraMatrix()/matrix.extract*() — the same API
+        // Toon Boom's own TB_ExportCamera.js uses — instead of guessing at
+        // raw attribute names. This reads the scene's CURRENT DEFAULT
+        // camera's fully-composited transform (any driving Peg already
+        // baked in), which is why there is no separate "peg" lookup here
+        // anymore: getCameraMatrix() cannot be pointed at an arbitrary
+        // camera node, only the default one, so this plugin is scoped to
+        // the default camera only for now.
+        var expected_camera_node = data.camera_node;
+        var start_frame = data.start_frame;
+        var stop_frame  = data.stop_frame;
 
         try
         {
-            self.log_warning("DIAGNOSTIC EXPORT_CAMERA_DATA attributes on "
-                + camera_node + ": " + JSON.stringify(node.getAttrList(camera_node, 1)));
-
-            // node.parentNode() is Harmony's animation-parenting call —
-            // the node a given node is pegged to, which is what actually
-            // drives its combined on-screen transform if the camera
-            // itself is left static and a Peg above it carries the move.
-            // NOT LIVE-VERIFIED: unconfirmed this returns "" / "Top" at
-            // the scene root rather than some other sentinel.
-            var parent_peg = node.parentNode(camera_node);
-            if (parent_peg === "Top" || parent_peg === "")
+            var resolved = self.get_default_camera({});
+            if (!resolved.success)
             {
-                parent_peg = null;
-            }
-            else
-            {
-                self.log_warning("DIAGNOSTIC EXPORT_CAMERA_DATA attributes on "
-                    + "driving peg " + parent_peg + ": "
-                    + JSON.stringify(node.getAttrList(parent_peg, 1)));
+                return resolved;
             }
 
-            function readTransform(nodeName, atFrame)
+            // The default camera may have changed (Scene > Camera) between
+            // when this publish item was collected and now — abort rather
+            // than silently exporting a different camera than the one shown
+            // in the Publish2 UI.
+            if (expected_camera_node && resolved.camera_node != expected_camera_node)
             {
-                return {
-                    "x":     node.getAttr(nodeName, atFrame, "POSITION.X").doubleValue(),
-                    "y":     node.getAttr(nodeName, atFrame, "POSITION.Y").doubleValue(),
-                    "z":     node.getAttr(nodeName, atFrame, "POSITION.Z").doubleValue(),
-                    "scale_x": node.getAttr(nodeName, atFrame, "SCALE.X").doubleValue(),
-                    "scale_y": node.getAttr(nodeName, atFrame, "SCALE.Y").doubleValue(),
-                    "angle":   node.getAttr(nodeName, atFrame, "ANGLE").doubleValue()
-                };
+                return { "success": false,
+                    "error": "Default camera changed since this item was collected "
+                        + "(was '" + expected_camera_node + "', now '"
+                        + resolved.camera_node + "'). Re-run collection and try again." };
             }
+
+            var camera_node = resolved.camera_node;
 
             var frames = [];
-            for (var f = start_frame; f <= stop_frame; f++)
+            var scaleVaries = false;
+            var firstScale = null;
+
+            for (var f = start_frame; f <= stop_frame; ++f)
             {
-                var record = { "frame": f, "camera": readTransform(camera_node, f) };
-                if (parent_peg !== null)
-                {
-                    record["peg"] = readTransform(parent_peg, f);
-                }
-                frames.push(record);
+                var m  = scene.getCameraMatrix(f);
+                var p  = m.extractPosition();
+                var r  = m.extractRotation();
+                var sc = m.extractScale();
+
+                // A zoom done via camera SCALE rather than a Z-truck won't
+                // survive a translate/rotate-only .chan export and needs
+                // animated focal length in Nuke instead — flagged in
+                // scene_info below rather than failing the export.
+                if (firstScale === null) { firstScale = sc; }
+                else if (sc.isNotEqual(firstScale)) { scaleVaries = true; }
+
+                frames.push({
+                    "frame": f,
+                    "position": { "x": p.x, "y": p.y, "z": p.z },
+                    "rotation": { "x": r.x, "y": r.y, "z": r.z },
+                    "scale":    { "x": sc.x, "y": sc.y, "z": sc.z }
+                });
             }
+
+            var fov = scene.defaultResolutionFOV();
 
             return {
                 "success": true,
                 "camera_node": camera_node,
-                "parent_peg": parent_peg,
-                "frames": frames
+                "frames": frames,
+                "scene_info": {
+                    "resolution_x":   scene.currentResolutionX(),
+                    "resolution_y":   scene.currentResolutionY(),
+                    "frame_rate":     scene.getFrameRate(),
+                    "fov_deg":        fov,
+                    "units_aspect_x": scene.unitsAspectRatioX(),
+                    "units_aspect_y": scene.unitsAspectRatioY(),
+                    "z_units":        scene.numberOfUnitsZ(),
+                    "rotation_order": "ZXY",
+                    "scale_varies":   scaleVaries
+                }
             };
         }
         catch(e)
@@ -1840,6 +1902,7 @@ function Engine()
         self.registerCallback("SHOW_HARMONY_MESSAGE", self.show_harmony_message);
 
         // Camera / scene data export
+        self.registerCallback("GET_DEFAULT_CAMERA", self.get_default_camera);
         self.registerCallback("EXPORT_CAMERA_DATA", self.export_camera_data);
 
         self.registerCallback("PING",  self.ping);
